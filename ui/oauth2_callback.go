@@ -2,127 +2,136 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
+	"errors"
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/cookie"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/ui/session"
-
-	"github.com/tomasen/realip"
+	"miniflux.app/config"
+	"miniflux.app/http/cookie"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/locale"
+	"miniflux.app/logger"
+	"miniflux.app/model"
+	"miniflux.app/ui/session"
 )
 
-// OAuth2Callback receives the authorization code and create a new session.
-func (c *Controller) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	sess := session.New(c.store, ctx)
+func (h *handler) oauth2Callback(w http.ResponseWriter, r *http.Request) {
+	clientIP := request.ClientIP(r)
+	printer := locale.NewPrinter(request.UserLanguage(r))
+	sess := session.New(h.store, request.SessionID(r))
 
-	provider := request.Param(r, "provider", "")
+	provider := request.RouteStringParam(r, "provider")
 	if provider == "" {
 		logger.Error("[OAuth2] Invalid or missing provider")
-		response.Redirect(w, r, route.Path(c.router, "login"))
+		html.Redirect(w, r, route.Path(h.router, "login"))
 		return
 	}
 
-	code := request.QueryParam(r, "code", "")
+	code := request.QueryStringParam(r, "code", "")
 	if code == "" {
 		logger.Error("[OAuth2] No code received on callback")
-		response.Redirect(w, r, route.Path(c.router, "login"))
+		html.Redirect(w, r, route.Path(h.router, "login"))
 		return
 	}
 
-	state := request.QueryParam(r, "state", "")
-	if state == "" || state != ctx.OAuth2State() {
-		logger.Error(`[OAuth2] Invalid state value: got "%s" instead of "%s"`, state, ctx.OAuth2State())
-		response.Redirect(w, r, route.Path(c.router, "login"))
+	state := request.QueryStringParam(r, "state", "")
+	if state == "" || state != request.OAuth2State(r) {
+		logger.Error(`[OAuth2] Invalid state value: got "%s" instead of "%s"`, state, request.OAuth2State(r))
+		html.Redirect(w, r, route.Path(h.router, "login"))
 		return
 	}
 
-	authProvider, err := getOAuth2Manager(c.cfg).Provider(provider)
+	authProvider, err := getOAuth2Manager(r.Context()).FindProvider(provider)
 	if err != nil {
 		logger.Error("[OAuth2] %v", err)
-		response.Redirect(w, r, route.Path(c.router, "login"))
+		html.Redirect(w, r, route.Path(h.router, "login"))
 		return
 	}
 
-	profile, err := authProvider.GetProfile(code)
+	profile, err := authProvider.GetProfile(r.Context(), code)
 	if err != nil {
 		logger.Error("[OAuth2] %v", err)
-		response.Redirect(w, r, route.Path(c.router, "login"))
+		html.Redirect(w, r, route.Path(h.router, "login"))
 		return
 	}
 
-	if ctx.IsAuthenticated() {
-		user, err := c.store.UserByExtraField(profile.Key, profile.ID)
+	logger.Info("[OAuth2] [ClientIP=%s] Successful auth for %s", clientIP, profile)
+
+	if request.IsAuthenticated(r) {
+		loggedUser, err := h.store.UserByID(request.UserID(r))
 		if err != nil {
-			html.ServerError(w, err)
+			html.ServerError(w, r, err)
 			return
 		}
 
-		if user != nil {
-			logger.Error("[OAuth2] User #%d cannot be associated because %s is already associated", ctx.UserID(), user.Username)
-			sess.NewFlashErrorMessage(c.translator.GetLanguage(ctx.UserLanguage()).Get("There is already someone associated with this provider!"))
-			response.Redirect(w, r, route.Path(c.router, "settings"))
+		if h.store.AnotherUserWithFieldExists(loggedUser.ID, profile.Key, profile.ID) {
+			logger.Error("[OAuth2] User #%d cannot be associated because it is already associated with another user", loggedUser.ID)
+			sess.NewFlashErrorMessage(printer.Printf("error.duplicate_linked_account"))
+			html.Redirect(w, r, route.Path(h.router, "settings"))
 			return
 		}
 
-		if err := c.store.UpdateExtraField(ctx.UserID(), profile.Key, profile.ID); err != nil {
-			html.ServerError(w, err)
+		authProvider.PopulateUserWithProfileID(loggedUser, profile)
+		if err := h.store.UpdateUser(loggedUser); err != nil {
+			html.ServerError(w, r, err)
 			return
 		}
 
-		sess.NewFlashMessage(c.translator.GetLanguage(ctx.UserLanguage()).Get("Your external account is now linked!"))
-		response.Redirect(w, r, route.Path(c.router, "settings"))
+		sess.NewFlashMessage(printer.Printf("alert.account_linked"))
+		html.Redirect(w, r, route.Path(h.router, "settings"))
 		return
 	}
 
-	user, err := c.store.UserByExtraField(profile.Key, profile.ID)
+	user, err := h.store.UserByField(profile.Key, profile.ID)
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if user == nil {
-		if !c.cfg.IsOAuth2UserCreationAllowed() {
-			html.Forbidden(w)
+		if !config.Opts.IsOAuth2UserCreationAllowed() {
+			html.Forbidden(w, r)
+			return
+		}
+
+		if h.store.UserExists(profile.Username) {
+			html.BadRequest(w, r, errors.New(printer.Printf("error.user_already_exists")))
 			return
 		}
 
 		user = model.NewUser()
 		user.Username = profile.Username
 		user.IsAdmin = false
-		user.Extra[profile.Key] = profile.ID
+		authProvider.PopulateUserWithProfileID(user, profile)
 
-		if err := c.store.CreateUser(user); err != nil {
-			html.ServerError(w, err)
+		if err := h.store.CreateUser(user); err != nil {
+			html.ServerError(w, r, err)
 			return
 		}
 	}
 
-	sessionToken, _, err := c.store.CreateUserSession(user.Username, r.UserAgent(), realip.RealIP(r))
+	sessionToken, _, err := h.store.CreateUserSessionFromUsername(user.Username, r.UserAgent(), clientIP)
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	logger.Info("[Controller:OAuth2Callback] username=%s just logged in", user.Username)
-	c.store.SetLastLogin(user.ID)
+	logger.Info("[OAuth2] [ClientIP=%s] username=%s (%s) just logged in", clientIP, user.Username, profile)
+
+	h.store.SetLastLogin(user.ID)
 	sess.SetLanguage(user.Language)
+	sess.SetTheme(user.Theme)
 
 	http.SetCookie(w, cookie.New(
 		cookie.CookieUserSessionID,
 		sessionToken,
-		c.cfg.IsHTTPS,
-		c.cfg.BasePath(),
+		config.Opts.HTTPS,
+		config.Opts.BasePath(),
 	))
 
-	response.Redirect(w, r, route.Path(c.router, "unread"))
+	html.Redirect(w, r, route.Path(h.router, "unread"))
 }

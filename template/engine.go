@@ -2,26 +2,24 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package template
+package template // import "miniflux.app/template"
 
 import (
 	"bytes"
 	"html/template"
 	"time"
 
-	"github.com/miniflux/miniflux/config"
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/locale"
-	"github.com/miniflux/miniflux/logger"
+	"miniflux.app/errors"
+	"miniflux.app/locale"
+	"miniflux.app/logger"
 
 	"github.com/gorilla/mux"
 )
 
 // Engine handles the templating system.
 type Engine struct {
-	templates  map[string]*template.Template
-	translator *locale.Translator
-	funcMap    *funcMap
+	templates map[string]*template.Template
+	funcMap   *funcMap
 }
 
 func (e *Engine) parseAll() {
@@ -36,34 +34,36 @@ func (e *Engine) parseAll() {
 	}
 }
 
-// Render process a template and write the ouput.
+// Render process a template.
 func (e *Engine) Render(name, language string, data interface{}) []byte {
 	tpl, ok := e.templates[name]
 	if !ok {
 		logger.Fatal("[Template] The template %s does not exists", name)
 	}
 
-	lang := e.translator.GetLanguage(language)
+	printer := locale.NewPrinter(language)
+
+	// Functions that need to be declared at runtime.
 	tpl.Funcs(template.FuncMap{
 		"elapsed": func(timezone string, t time.Time) string {
-			return elapsedTime(lang, timezone, t)
+			return elapsedTime(printer, timezone, t)
 		},
 		"t": func(key interface{}, args ...interface{}) string {
-			switch key.(type) {
+			switch k := key.(type) {
 			case string:
-				return lang.Get(key.(string), args...)
+				return printer.Printf(k, args...)
 			case errors.LocalizedError:
-				return key.(errors.LocalizedError).Localize(lang)
+				return k.Localize(printer)
 			case *errors.LocalizedError:
-				return key.(*errors.LocalizedError).Localize(lang)
+				return k.Localize(printer)
 			case error:
-				return key.(error).Error()
+				return k.Error()
 			default:
 				return ""
 			}
 		},
 		"plural": func(key string, n int, args ...interface{}) string {
-			return lang.Plural(key, n, args...)
+			return printer.Plural(key, n, args...)
 		},
 	})
 
@@ -77,11 +77,10 @@ func (e *Engine) Render(name, language string, data interface{}) []byte {
 }
 
 // NewEngine returns a new template engine.
-func NewEngine(cfg *config.Config, router *mux.Router, translator *locale.Translator) *Engine {
+func NewEngine(router *mux.Router) *Engine {
 	tpl := &Engine{
-		templates:  make(map[string]*template.Template),
-		translator: translator,
-		funcMap:    newFuncMap(cfg, router),
+		templates: make(map[string]*template.Template),
+		funcMap:   &funcMap{router},
 	}
 
 	tpl.parseAll()

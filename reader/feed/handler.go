@@ -2,223 +2,193 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package feed
+package feed // import "miniflux.app/reader/feed"
 
 import (
 	"fmt"
 	"time"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/http/client"
-	"github.com/miniflux/miniflux/locale"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/reader/icon"
-	"github.com/miniflux/miniflux/reader/processor"
-	"github.com/miniflux/miniflux/storage"
-	"github.com/miniflux/miniflux/timer"
+	"miniflux.app/config"
+	"miniflux.app/errors"
+	"miniflux.app/http/client"
+	"miniflux.app/locale"
+	"miniflux.app/logger"
+	"miniflux.app/model"
+	"miniflux.app/reader/browser"
+	"miniflux.app/reader/icon"
+	"miniflux.app/reader/parser"
+	"miniflux.app/reader/processor"
+	"miniflux.app/storage"
+	"miniflux.app/timer"
 )
 
 var (
-	errRequestFailed    = "Unable to execute request: %v"
-	errServerFailure    = "Unable to fetch feed (statusCode=%d)"
 	errDuplicate        = "This feed already exists (%s)"
 	errNotFound         = "Feed %d not found"
-	errEncoding         = "Unable to normalize encoding: %q"
 	errCategoryNotFound = "Category not found for this user"
-	errEmptyFeed        = "This feed is empty"
 )
 
 // Handler contains all the logic to create and refresh feeds.
 type Handler struct {
-	store      *storage.Storage
-	translator *locale.Translator
+	store *storage.Storage
 }
 
 // CreateFeed fetch, parse and store a new feed.
-func (h *Handler) CreateFeed(userID, categoryID int64, url string, crawler bool) (*model.Feed, error) {
+func (h *Handler) CreateFeed(userID, categoryID int64, url string, crawler bool, userAgent, username, password, scraperRules, rewriteRules, blocklistRules, keeplistRules string, fetchViaProxy bool) (*model.Feed, error) {
 	defer timer.ExecutionTime(time.Now(), fmt.Sprintf("[Handler:CreateFeed] feedUrl=%s", url))
 
 	if !h.store.CategoryExists(userID, categoryID) {
 		return nil, errors.NewLocalizedError(errCategoryNotFound)
 	}
 
-	clt := client.New(url)
-	response, err := clt.Get()
-	if err != nil {
-		if _, ok := err.(*errors.LocalizedError); ok {
-			return nil, err
-		}
-		return nil, errors.NewLocalizedError(errRequestFailed, err)
+	request := client.NewClientWithConfig(url, config.Opts)
+	request.WithCredentials(username, password)
+	request.WithUserAgent(userAgent)
+
+	if fetchViaProxy {
+		request.WithProxy()
 	}
 
-	if response.HasServerFailure() {
-		return nil, errors.NewLocalizedError(errServerFailure, response.StatusCode)
-	}
-
-	// Content-Length = -1 when no Content-Length header is sent
-	if response.ContentLength == 0 {
-		return nil, errors.NewLocalizedError(errEmptyFeed)
+	response, requestErr := browser.Exec(request)
+	if requestErr != nil {
+		return nil, requestErr
 	}
 
 	if h.store.FeedURLExists(userID, response.EffectiveURL) {
 		return nil, errors.NewLocalizedError(errDuplicate, response.EffectiveURL)
 	}
 
-	body, err := response.NormalizeBodyEncoding()
-	if err != nil {
-		return nil, errors.NewLocalizedError(errEncoding, err)
+	subscription, parseErr := parser.ParseFeed(response.EffectiveURL, response.BodyAsString())
+	if parseErr != nil {
+		return nil, parseErr
 	}
 
-	subscription, feedErr := parseFeed(body)
-	if feedErr != nil {
-		return nil, feedErr
-	}
-
-	feedProcessor := processor.NewFeedProcessor(userID, h.store, subscription)
-	feedProcessor.WithCrawler(crawler)
-	feedProcessor.Process()
-
-	subscription.Category = &model.Category{ID: categoryID}
-	subscription.EtagHeader = response.ETag
-	subscription.LastModifiedHeader = response.LastModified
-	subscription.FeedURL = response.EffectiveURL
 	subscription.UserID = userID
-	subscription.Crawler = crawler
+	subscription.WithCategoryID(categoryID)
+	subscription.WithBrowsingParameters(crawler, userAgent, username, password, scraperRules, rewriteRules, blocklistRules, keeplistRules, fetchViaProxy)
+	subscription.WithClientResponse(response)
+	subscription.CheckedNow()
 
-	if subscription.SiteURL == "" {
-		subscription.SiteURL = subscription.FeedURL
-	}
+	processor.ProcessFeedEntries(h.store, subscription)
 
-	err = h.store.CreateFeed(subscription)
-	if err != nil {
-		return nil, err
+	if storeErr := h.store.CreateFeed(subscription); storeErr != nil {
+		return nil, storeErr
 	}
 
 	logger.Debug("[Handler:CreateFeed] Feed saved with ID: %d", subscription.ID)
 
-	icon, err := icon.FindIcon(subscription.SiteURL)
-	if err != nil {
-		logger.Error("[Handler:CreateFeed] %v", err)
-	} else if icon == nil {
-		logger.Info("No icon found for feedID=%d", subscription.ID)
-	} else {
-		h.store.CreateFeedIcon(subscription, icon)
-	}
-
+	checkFeedIcon(h.store, subscription.ID, subscription.SiteURL, fetchViaProxy)
 	return subscription, nil
 }
 
-// RefreshFeed fetch and update a feed if necessary.
+// RefreshFeed refreshes a feed.
 func (h *Handler) RefreshFeed(userID, feedID int64) error {
 	defer timer.ExecutionTime(time.Now(), fmt.Sprintf("[Handler:RefreshFeed] feedID=%d", feedID))
-	userLanguage, err := h.store.UserLanguage(userID)
-	if err != nil {
-		logger.Error("[Handler:RefreshFeed] %v", err)
-		userLanguage = "en_US"
-	}
+	userLanguage := h.store.UserLanguage(userID)
+	printer := locale.NewPrinter(userLanguage)
 
-	currentLanguage := h.translator.GetLanguage(userLanguage)
-
-	originalFeed, err := h.store.FeedByID(userID, feedID)
-	if err != nil {
-		return err
+	originalFeed, storeErr := h.store.FeedByID(userID, feedID)
+	if storeErr != nil {
+		return storeErr
 	}
 
 	if originalFeed == nil {
 		return errors.NewLocalizedError(errNotFound, feedID)
 	}
 
-	clt := client.New(originalFeed.FeedURL)
-	clt.WithCacheHeaders(originalFeed.EtagHeader, originalFeed.LastModifiedHeader)
-	response, err := clt.Get()
-	if err != nil {
-		var customErr errors.LocalizedError
-		if lerr, ok := err.(*errors.LocalizedError); ok {
-			customErr = *lerr
-		} else {
-			customErr = *errors.NewLocalizedError(errRequestFailed, err)
+	weeklyEntryCount := 0
+	if config.Opts.PollingScheduler() == model.SchedulerEntryFrequency {
+		var weeklyCountErr error
+		weeklyEntryCount, weeklyCountErr = h.store.WeeklyFeedEntryCount(userID, feedID)
+		if weeklyCountErr != nil {
+			return weeklyCountErr
 		}
-
-		originalFeed.ParsingErrorCount++
-		originalFeed.ParsingErrorMsg = customErr.Localize(currentLanguage)
-		h.store.UpdateFeed(originalFeed)
-		return customErr
 	}
 
-	originalFeed.CheckedAt = time.Now()
+	originalFeed.CheckedNow()
+	originalFeed.ScheduleNextCheck(weeklyEntryCount)
 
-	if response.HasServerFailure() {
-		err := errors.NewLocalizedError(errServerFailure, response.StatusCode)
-		originalFeed.ParsingErrorCount++
-		originalFeed.ParsingErrorMsg = err.Localize(currentLanguage)
-		h.store.UpdateFeed(originalFeed)
-		return err
+	request := client.NewClientWithConfig(originalFeed.FeedURL, config.Opts)
+	request.WithCredentials(originalFeed.Username, originalFeed.Password)
+	request.WithUserAgent(originalFeed.UserAgent)
+
+	if !originalFeed.IgnoreHTTPCache {
+		request.WithCacheHeaders(originalFeed.EtagHeader, originalFeed.LastModifiedHeader)
 	}
 
-	if response.IsModified(originalFeed.EtagHeader, originalFeed.LastModifiedHeader) {
+	if originalFeed.FetchViaProxy {
+		request.WithProxy()
+	}
+
+	response, requestErr := browser.Exec(request)
+	if requestErr != nil {
+		originalFeed.WithError(requestErr.Localize(printer))
+		h.store.UpdateFeedError(originalFeed)
+		return requestErr
+	}
+
+	if h.store.AnotherFeedURLExists(userID, originalFeed.ID, response.EffectiveURL) {
+		storeErr := errors.NewLocalizedError(errDuplicate, response.EffectiveURL)
+		originalFeed.WithError(storeErr.Error())
+		h.store.UpdateFeedError(originalFeed)
+		return storeErr
+	}
+
+	if originalFeed.IgnoreHTTPCache || response.IsModified(originalFeed.EtagHeader, originalFeed.LastModifiedHeader) {
 		logger.Debug("[Handler:RefreshFeed] Feed #%d has been modified", feedID)
 
-		// Content-Length = -1 when no Content-Length header is sent
-		if response.ContentLength == 0 {
-			err := errors.NewLocalizedError(errEmptyFeed)
-			originalFeed.ParsingErrorCount++
-			originalFeed.ParsingErrorMsg = err.Localize(currentLanguage)
-			h.store.UpdateFeed(originalFeed)
-			return err
-		}
-
-		body, err := response.NormalizeBodyEncoding()
-		if err != nil {
-			return errors.NewLocalizedError(errEncoding, err)
-		}
-
-		subscription, parseErr := parseFeed(body)
+		updatedFeed, parseErr := parser.ParseFeed(response.EffectiveURL, response.BodyAsString())
 		if parseErr != nil {
-			originalFeed.ParsingErrorCount++
-			originalFeed.ParsingErrorMsg = parseErr.Localize(currentLanguage)
-			h.store.UpdateFeed(originalFeed)
-			return err
+			originalFeed.WithError(parseErr.Localize(printer))
+			h.store.UpdateFeedError(originalFeed)
+			return parseErr
 		}
 
-		feedProcessor := processor.NewFeedProcessor(userID, h.store, subscription)
-		feedProcessor.WithScraperRules(originalFeed.ScraperRules)
-		feedProcessor.WithRewriteRules(originalFeed.RewriteRules)
-		feedProcessor.WithCrawler(originalFeed.Crawler)
-		feedProcessor.Process()
+		originalFeed.Entries = updatedFeed.Entries
+		processor.ProcessFeedEntries(h.store, originalFeed)
 
-		originalFeed.EtagHeader = response.ETag
-		originalFeed.LastModifiedHeader = response.LastModified
-
-		// Note: We don't update existing entries when the crawler is enabled (we crawl only inexisting entries).
-		if err := h.store.UpdateEntries(originalFeed.UserID, originalFeed.ID, subscription.Entries, !originalFeed.Crawler); err != nil {
-			return err
+		// We don't update existing entries when the crawler is enabled (we crawl only inexisting entries).
+		if storeErr := h.store.RefreshFeedEntries(originalFeed.UserID, originalFeed.ID, originalFeed.Entries, !originalFeed.Crawler); storeErr != nil {
+			originalFeed.WithError(storeErr.Error())
+			h.store.UpdateFeedError(originalFeed)
+			return storeErr
 		}
 
-		if !h.store.HasIcon(originalFeed.ID) {
-			logger.Debug("[Handler:RefreshFeed] Looking for feed icon")
-			icon, err := icon.FindIcon(originalFeed.SiteURL)
-			if err != nil {
-				logger.Debug("[Handler:RefreshFeed] %v", err)
-			} else {
-				h.store.CreateFeedIcon(originalFeed, icon)
-			}
-		}
+		// We update caching headers only if the feed has been modified,
+		// because some websites don't return the same headers when replying with a 304.
+		originalFeed.WithClientResponse(response)
+		checkFeedIcon(h.store, originalFeed.ID, originalFeed.SiteURL, originalFeed.FetchViaProxy)
 	} else {
 		logger.Debug("[Handler:RefreshFeed] Feed #%d not modified", feedID)
 	}
 
-	originalFeed.ParsingErrorCount = 0
-	originalFeed.ParsingErrorMsg = ""
+	originalFeed.ResetErrorCounter()
 
-	if originalFeed.SiteURL == "" {
-		originalFeed.SiteURL = originalFeed.FeedURL
+	if storeErr := h.store.UpdateFeed(originalFeed); storeErr != nil {
+		originalFeed.WithError(storeErr.Error())
+		h.store.UpdateFeedError(originalFeed)
+		return storeErr
 	}
 
-	return h.store.UpdateFeed(originalFeed)
+	return nil
 }
 
 // NewFeedHandler returns a feed handler.
-func NewFeedHandler(store *storage.Storage, translator *locale.Translator) *Handler {
-	return &Handler{store, translator}
+func NewFeedHandler(store *storage.Storage) *Handler {
+	return &Handler{store}
+}
+
+func checkFeedIcon(store *storage.Storage, feedID int64, websiteURL string, fetchViaProxy bool) {
+	if !store.HasIcon(feedID) {
+		icon, err := icon.FindIcon(websiteURL, fetchViaProxy)
+		if err != nil {
+			logger.Debug("CheckFeedIcon: %v (feedID=%d websiteURL=%s)", err, feedID, websiteURL)
+		} else if icon == nil {
+			logger.Debug("CheckFeedIcon: No icon found (feedID=%d websiteURL=%s)", feedID, websiteURL)
+		} else {
+			if err := store.CreateFeedIcon(feedID, icon); err != nil {
+				logger.Debug("CheckFeedIcon: %v (feedID=%d websiteURL=%s)", err, feedID, websiteURL)
+			}
+		}
+	}
 }

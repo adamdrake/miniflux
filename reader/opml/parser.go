@@ -2,20 +2,22 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package opml
+package opml // import "miniflux.app/reader/opml"
 
 import (
 	"encoding/xml"
 	"io"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/reader/encoding"
+	"miniflux.app/errors"
+	"miniflux.app/reader/encoding"
 )
 
 // Parse reads an OPML file and returns a SubcriptionList.
 func Parse(data io.Reader) (SubcriptionList, *errors.LocalizedError) {
 	feeds := new(opml)
 	decoder := xml.NewDecoder(data)
+	decoder.Entity = xml.HTMLEntity
+	decoder.Strict = false
 	decoder.CharsetReader = encoding.CharsetReader
 
 	err := decoder.Decode(feeds)

@@ -2,7 +2,7 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package scraper
+package scraper // import "miniflux.app/reader/scraper"
 
 import (
 	"errors"
@@ -10,16 +10,22 @@ import (
 	"io"
 	"strings"
 
+	"miniflux.app/config"
+	"miniflux.app/http/client"
+	"miniflux.app/logger"
+	"miniflux.app/reader/readability"
+	"miniflux.app/url"
+
 	"github.com/PuerkitoBio/goquery"
-	"github.com/miniflux/miniflux/http/client"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/reader/readability"
-	"github.com/miniflux/miniflux/url"
 )
 
-// Fetch downloads a web page a returns relevant contents.
-func Fetch(websiteURL, rules string) (string, error) {
-	clt := client.New(websiteURL)
+// Fetch downloads a web page and returns relevant contents.
+func Fetch(websiteURL, rules, userAgent string) (string, error) {
+	clt := client.NewClientWithConfig(websiteURL, config.Opts)
+	if userAgent != "" {
+		clt.WithUserAgent(userAgent)
+	}
+
 	response, err := clt.Get()
 	if err != nil {
 		return "", err
@@ -29,12 +35,11 @@ func Fetch(websiteURL, rules string) (string, error) {
 		return "", errors.New("scraper: unable to download web page")
 	}
 
-	if !strings.Contains(response.ContentType, "text/html") {
+	if !isAllowedContentType(response.ContentType) {
 		return "", fmt.Errorf("scraper: this resource is not a HTML document (%s)", response.ContentType)
 	}
 
-	page, err := response.NormalizeBodyEncoding()
-	if err != nil {
+	if err = response.EnsureUnicodeBody(); err != nil {
 		return "", err
 	}
 
@@ -47,11 +52,11 @@ func Fetch(websiteURL, rules string) (string, error) {
 
 	var content string
 	if rules != "" {
-		logger.Debug(`[Scraper] Using rules "%s" for "%s"`, rules, websiteURL)
-		content, err = scrapContent(page, rules)
+		logger.Debug(`[Scraper] Using rules %q for %q`, rules, websiteURL)
+		content, err = scrapContent(response.Body, rules)
 	} else {
-		logger.Debug(`[Scraper] Using readability for "%s"`, websiteURL)
-		content, err = readability.ExtractContent(page)
+		logger.Debug(`[Scraper] Using readability for %q`, websiteURL)
+		content, err = readability.ExtractContent(response.Body)
 	}
 
 	if err != nil {
@@ -71,13 +76,7 @@ func scrapContent(page io.Reader, rules string) (string, error) {
 	document.Find(rules).Each(func(i int, s *goquery.Selection) {
 		var content string
 
-		// For some inline elements, we get the parent.
-		if s.Is("img") || s.Is("iframe") {
-			content, _ = s.Parent().Html()
-		} else {
-			content, _ = s.Html()
-		}
-
+		content, _ = goquery.OuterHtml(s)
 		contents += content
 	})
 
@@ -94,4 +93,10 @@ func getPredefinedScraperRules(websiteURL string) string {
 	}
 
 	return ""
+}
+
+func isAllowedContentType(contentType string) bool {
+	contentType = strings.ToLower(contentType)
+	return strings.HasPrefix(contentType, "text/html") ||
+		strings.HasPrefix(contentType, "application/xhtml+xml")
 }

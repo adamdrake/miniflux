@@ -2,11 +2,10 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package client
+package client // import "miniflux.app/http/client"
 
 import (
 	"bytes"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -18,18 +17,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/timer"
-	"github.com/miniflux/miniflux/version"
+	"miniflux.app/config"
+	"miniflux.app/errors"
+	"miniflux.app/logger"
+	"miniflux.app/timer"
+	url_helper "miniflux.app/url"
 )
 
 const (
-	// 20 seconds max.
-	requestTimeout = 20
-
-	// 15MB max.
-	maxBodySize = 1024 * 1024 * 15
+	defaultHTTPClientTimeout     = 20
+	defaultHTTPClientMaxBodySize = 15 * 1024 * 1024
 )
 
 var (
@@ -39,38 +36,111 @@ var (
 	errRequestTimeout            = "Website unreachable, the request timed out after %d seconds"
 )
 
-// Client is a HTTP Client :)
+// Client builds and executes HTTP requests.
 type Client struct {
-	url                 string
-	etagHeader          string
-	lastModifiedHeader  string
-	authorizationHeader string
-	username            string
-	password            string
-	Insecure            bool
+	inputURL string
+
+	requestURL                 string
+	requestEtagHeader          string
+	requestLastModifiedHeader  string
+	requestAuthorizationHeader string
+	requestUsername            string
+	requestPassword            string
+	requestUserAgent           string
+
+	useProxy             bool
+	doNotFollowRedirects bool
+
+	ClientTimeout     int
+	ClientMaxBodySize int64
+	ClientProxyURL    string
+}
+
+// New initializes a new HTTP client.
+func New(url string) *Client {
+	return &Client{
+		inputURL:          url,
+		ClientTimeout:     defaultHTTPClientTimeout,
+		ClientMaxBodySize: defaultHTTPClientMaxBodySize,
+	}
+}
+
+// NewClientWithConfig initializes a new HTTP client with application config options.
+func NewClientWithConfig(url string, opts *config.Options) *Client {
+	return &Client{
+		inputURL:          url,
+		requestUserAgent:  opts.HTTPClientUserAgent(),
+		ClientTimeout:     opts.HTTPClientTimeout(),
+		ClientMaxBodySize: opts.HTTPClientMaxBodySize(),
+		ClientProxyURL:    opts.HTTPClientProxy(),
+	}
+}
+
+func (c *Client) String() string {
+	etagHeader := c.requestEtagHeader
+	if c.requestEtagHeader == "" {
+		etagHeader = "None"
+	}
+
+	lastModifiedHeader := c.requestLastModifiedHeader
+	if c.requestLastModifiedHeader == "" {
+		lastModifiedHeader = "None"
+	}
+
+	return fmt.Sprintf(
+		`InputURL=%q RequestURL=%q ETag=%s LastModified=%s Auth=%v UserAgent=%q`,
+		c.inputURL,
+		c.requestURL,
+		etagHeader,
+		lastModifiedHeader,
+		c.requestAuthorizationHeader != "" || (c.requestUsername != "" && c.requestPassword != ""),
+		c.requestUserAgent,
+	)
 }
 
 // WithCredentials defines the username/password for HTTP Basic authentication.
 func (c *Client) WithCredentials(username, password string) *Client {
-	c.username = username
-	c.password = password
+	if username != "" && password != "" {
+		c.requestUsername = username
+		c.requestPassword = password
+	}
 	return c
 }
 
-// WithAuthorization defines authorization header value.
+// WithAuthorization defines the authorization HTTP header value.
 func (c *Client) WithAuthorization(authorization string) *Client {
-	c.authorizationHeader = authorization
+	c.requestAuthorizationHeader = authorization
 	return c
 }
 
 // WithCacheHeaders defines caching headers.
 func (c *Client) WithCacheHeaders(etagHeader, lastModifiedHeader string) *Client {
-	c.etagHeader = etagHeader
-	c.lastModifiedHeader = lastModifiedHeader
+	c.requestLastModifiedHeader = etagHeader
+	c.requestLastModifiedHeader = lastModifiedHeader
 	return c
 }
 
-// Get execute a GET HTTP request.
+// WithProxy enables proxy for the current HTTP request.
+func (c *Client) WithProxy() *Client {
+	c.useProxy = true
+	return c
+}
+
+// WithoutRedirects disables HTTP redirects.
+func (c *Client) WithoutRedirects() *Client {
+	c.doNotFollowRedirects = true
+	return c
+}
+
+// WithUserAgent defines the User-Agent header to use for HTTP requests.
+func (c *Client) WithUserAgent(userAgent string) *Client {
+	if userAgent != "" {
+		c.requestUserAgent = userAgent
+	}
+	return c
+}
+
+// Get performs a GET HTTP request.
 func (c *Client) Get() (*Response, error) {
 	request, err := c.buildRequest(http.MethodGet, nil)
 	if err != nil {
@@ -80,7 +150,7 @@ func (c *Client) Get() (*Response, error) {
 	return c.executeRequest(request)
 }
 
-// PostForm execute a POST HTTP request with form values.
+// PostForm performs a POST HTTP request with form encoded values.
 func (c *Client) PostForm(values url.Values) (*Response, error) {
 	request, err := c.buildRequest(http.MethodPost, strings.NewReader(values.Encode()))
 	if err != nil {
@@ -91,7 +161,7 @@ func (c *Client) PostForm(values url.Values) (*Response, error) {
 	return c.executeRequest(request)
 }
 
-// PostJSON execute a POST HTTP request with JSON payload.
+// PostJSON performs a POST HTTP request with a JSON payload.
 func (c *Client) PostJSON(data interface{}) (*Response, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -108,10 +178,19 @@ func (c *Client) PostJSON(data interface{}) (*Response, error) {
 }
 
 func (c *Client) executeRequest(request *http.Request) (*Response, error) {
-	defer timer.ExecutionTime(time.Now(), fmt.Sprintf("[HttpClient] url=%s", c.url))
+	defer timer.ExecutionTime(time.Now(), fmt.Sprintf("[HttpClient] inputURL=%s", c.inputURL))
+
+	logger.Debug("[HttpClient:Before] Method=%s %s",
+		request.Method,
+		c.String(),
+	)
 
 	client := c.buildClient()
 	resp, err := client.Do(request)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+
 	if err != nil {
 		if uerr, ok := err.(*url.Error); ok {
 			switch uerr.Err.(type) {
@@ -126,7 +205,7 @@ func (c *Client) executeRequest(request *http.Request) (*Response, error) {
 			case net.Error:
 				nerr := uerr.Err.(net.Error)
 				if nerr.Timeout() {
-					err = errors.NewLocalizedError(errRequestTimeout, requestTimeout)
+					err = errors.NewLocalizedError(errRequestTimeout, c.ClientTimeout)
 				} else if nerr.Temporary() {
 					err = errors.NewLocalizedError(errTemporaryNetworkOperation, nerr)
 				}
@@ -135,9 +214,8 @@ func (c *Client) executeRequest(request *http.Request) (*Response, error) {
 
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	if resp.ContentLength > maxBodySize {
+	if resp.ContentLength > c.ClientMaxBodySize {
 		return nil, fmt.Errorf("client: response too large (%d bytes)", resp.ContentLength)
 	}
 
@@ -152,20 +230,15 @@ func (c *Client) executeRequest(request *http.Request) (*Response, error) {
 		EffectiveURL:  resp.Request.URL.String(),
 		LastModified:  resp.Header.Get("Last-Modified"),
 		ETag:          resp.Header.Get("ETag"),
+		Expires:       resp.Header.Get("Expires"),
 		ContentType:   resp.Header.Get("Content-Type"),
 		ContentLength: resp.ContentLength,
 	}
 
-	logger.Debug("[HttpClient:%s] URL=%s, EffectiveURL=%s, Code=%d, Length=%d, Type=%s, ETag=%s, LastMod=%s, Expires=%s",
+	logger.Debug("[HttpClient:After] Method=%s %s; Response => %s",
 		request.Method,
-		c.url,
-		response.EffectiveURL,
-		response.StatusCode,
-		resp.ContentLength,
-		response.ContentType,
-		response.ETag,
-		response.LastModified,
-		resp.Header.Get("Expires"),
+		c.String(),
+		response,
 	)
 
 	// Ignore caching headers for feeds that do not want any cache.
@@ -179,52 +252,84 @@ func (c *Client) executeRequest(request *http.Request) (*Response, error) {
 }
 
 func (c *Client) buildRequest(method string, body io.Reader) (*http.Request, error) {
-	request, err := http.NewRequest(method, c.url, body)
+	c.requestURL = url_helper.RequestURI(c.inputURL)
+	request, err := http.NewRequest(method, c.requestURL, body)
 	if err != nil {
 		return nil, err
 	}
 
 	request.Header = c.buildHeaders()
 
-	if c.username != "" && c.password != "" {
-		request.SetBasicAuth(c.username, c.password)
+	if c.requestUsername != "" && c.requestPassword != "" {
+		request.SetBasicAuth(c.requestUsername, c.requestPassword)
 	}
 
 	return request, nil
 }
 
 func (c *Client) buildClient() http.Client {
-	client := http.Client{Timeout: time.Duration(requestTimeout * time.Second)}
-	if c.Insecure {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	client := http.Client{
+		Timeout: time.Duration(c.ClientTimeout) * time.Second,
+	}
+
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			// Default is 30s.
+			Timeout: 10 * time.Second,
+
+			// Default is 30s.
+			KeepAlive: 15 * time.Second,
+		}).DialContext,
+
+		// Default is 100.
+		MaxIdleConns: 50,
+
+		// Default is 90s.
+		IdleConnTimeout: 10 * time.Second,
+	}
+
+	if c.doNotFollowRedirects {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
 		}
 	}
+
+	if c.useProxy && c.ClientProxyURL != "" {
+		proxyURL, err := url.Parse(c.ClientProxyURL)
+		if err != nil {
+			logger.Error("[HttpClient] Proxy URL error: %v", err)
+		} else {
+			logger.Debug("[HttpClient] Use proxy: %s", proxyURL)
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+
+	client.Transport = transport
 
 	return client
 }
 
 func (c *Client) buildHeaders() http.Header {
 	headers := make(http.Header)
-	headers.Add("User-Agent", "Mozilla/5.0 (compatible; Miniflux/"+version.Version+"; +https://miniflux.net)")
 	headers.Add("Accept", "*/*")
 
-	if c.etagHeader != "" {
-		headers.Add("If-None-Match", c.etagHeader)
+	if c.requestUserAgent != "" {
+		headers.Add("User-Agent", c.requestUserAgent)
 	}
 
-	if c.lastModifiedHeader != "" {
-		headers.Add("If-Modified-Since", c.lastModifiedHeader)
+	if c.requestEtagHeader != "" {
+		headers.Add("If-None-Match", c.requestEtagHeader)
 	}
 
-	if c.authorizationHeader != "" {
-		headers.Add("Authorization", c.authorizationHeader)
+	if c.requestLastModifiedHeader != "" {
+		headers.Add("If-Modified-Since", c.requestLastModifiedHeader)
 	}
 
+	if c.requestAuthorizationHeader != "" {
+		headers.Add("Authorization", c.requestAuthorizationHeader)
+	}
+
+	headers.Add("Connection", "close")
 	return headers
-}
-
-// New returns a new HTTP client.
-func New(url string) *Client {
-	return &Client{url: url, Insecure: false}
 }

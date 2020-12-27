@@ -2,17 +2,17 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package api
+package api // import "miniflux.app/api"
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
 
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/model"
 )
 
-type feedIcon struct {
+type feedIconResponse struct {
 	ID       int64  `json:"id"`
 	MimeType string `json:"mime_type"`
 	Data     string `json:"data"`
@@ -23,34 +23,256 @@ type entriesResponse struct {
 	Entries model.Entries `json:"entries"`
 }
 
-func decodeUserPayload(r io.ReadCloser) (*model.User, error) {
-	var user model.User
-
-	decoder := json.NewDecoder(r)
-	defer r.Close()
-	if err := decoder.Decode(&user); err != nil {
-		return nil, fmt.Errorf("Unable to decode user JSON object: %v", err)
-	}
-
-	return &user, nil
+type subscriptionDiscoveryRequest struct {
+	URL           string `json:"url"`
+	UserAgent     string `json:"user_agent"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	FetchViaProxy bool   `json:"fetch_via_proxy"`
 }
 
-func decodeURLPayload(r io.ReadCloser) (string, error) {
-	type payload struct {
-		URL string `json:"url"`
-	}
-
-	var p payload
-	decoder := json.NewDecoder(r)
+func decodeSubscriptionDiscoveryRequest(r io.ReadCloser) (*subscriptionDiscoveryRequest, error) {
 	defer r.Close()
-	if err := decoder.Decode(&p); err != nil {
-		return "", fmt.Errorf("invalid JSON payload: %v", err)
+
+	var s subscriptionDiscoveryRequest
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&s); err != nil {
+		return nil, fmt.Errorf("invalid JSON payload: %v", err)
 	}
 
-	return p.URL, nil
+	return &s, nil
 }
 
-func decodeEntryStatusPayload(r io.ReadCloser) ([]int64, string, error) {
+type feedCreationResponse struct {
+	FeedID int64 `json:"feed_id"`
+}
+
+type feedCreationRequest struct {
+	FeedURL        string `json:"feed_url"`
+	CategoryID     int64  `json:"category_id"`
+	UserAgent      string `json:"user_agent"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	Crawler        bool   `json:"crawler"`
+	FetchViaProxy  bool   `json:"fetch_via_proxy"`
+	ScraperRules   string `json:"scraper_rules"`
+	RewriteRules   string `json:"rewrite_rules"`
+	BlocklistRules string `json:"blocklist_rules"`
+	KeeplistRules  string `json:"keeplist_rules"`
+}
+
+func decodeFeedCreationRequest(r io.ReadCloser) (*feedCreationRequest, error) {
+	defer r.Close()
+
+	var fc feedCreationRequest
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&fc); err != nil {
+		return nil, fmt.Errorf("Invalid JSON payload: %v", err)
+	}
+
+	return &fc, nil
+}
+
+type feedModificationRequest struct {
+	FeedURL         *string `json:"feed_url"`
+	SiteURL         *string `json:"site_url"`
+	Title           *string `json:"title"`
+	ScraperRules    *string `json:"scraper_rules"`
+	RewriteRules    *string `json:"rewrite_rules"`
+	BlocklistRules  *string `json:"blocklist_rules"`
+	KeeplistRules   *string `json:"keeplist_rules"`
+	Crawler         *bool   `json:"crawler"`
+	UserAgent       *string `json:"user_agent"`
+	Username        *string `json:"username"`
+	Password        *string `json:"password"`
+	CategoryID      *int64  `json:"category_id"`
+	Disabled        *bool   `json:"disabled"`
+	IgnoreHTTPCache *bool   `json:"ignore_http_cache"`
+	FetchViaProxy   *bool   `json:"fetch_via_proxy"`
+}
+
+func (f *feedModificationRequest) Update(feed *model.Feed) {
+	if f.FeedURL != nil && *f.FeedURL != "" {
+		feed.FeedURL = *f.FeedURL
+	}
+
+	if f.SiteURL != nil && *f.SiteURL != "" {
+		feed.SiteURL = *f.SiteURL
+	}
+
+	if f.Title != nil && *f.Title != "" {
+		feed.Title = *f.Title
+	}
+
+	if f.ScraperRules != nil {
+		feed.ScraperRules = *f.ScraperRules
+	}
+
+	if f.RewriteRules != nil {
+		feed.RewriteRules = *f.RewriteRules
+	}
+
+	if f.KeeplistRules != nil {
+		feed.KeeplistRules = *f.KeeplistRules
+	}
+
+	if f.BlocklistRules != nil {
+		feed.BlocklistRules = *f.BlocklistRules
+	}
+
+	if f.Crawler != nil {
+		feed.Crawler = *f.Crawler
+	}
+
+	if f.UserAgent != nil {
+		feed.UserAgent = *f.UserAgent
+	}
+
+	if f.Username != nil {
+		feed.Username = *f.Username
+	}
+
+	if f.Password != nil {
+		feed.Password = *f.Password
+	}
+
+	if f.CategoryID != nil && *f.CategoryID > 0 {
+		feed.Category.ID = *f.CategoryID
+	}
+
+	if f.Disabled != nil {
+		feed.Disabled = *f.Disabled
+	}
+
+	if f.IgnoreHTTPCache != nil {
+		feed.IgnoreHTTPCache = *f.IgnoreHTTPCache
+	}
+
+	if f.FetchViaProxy != nil {
+		feed.FetchViaProxy = *f.FetchViaProxy
+	}
+}
+
+func decodeFeedModificationRequest(r io.ReadCloser) (*feedModificationRequest, error) {
+	defer r.Close()
+
+	var feed feedModificationRequest
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&feed); err != nil {
+		return nil, fmt.Errorf("Unable to decode feed modification JSON object: %v", err)
+	}
+
+	return &feed, nil
+}
+
+type userCreationRequest struct {
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	IsAdmin         bool   `json:"is_admin"`
+	GoogleID        string `json:"google_id"`
+	OpenIDConnectID string `json:"openid_connect_id"`
+}
+
+func decodeUserCreationRequest(r io.ReadCloser) (*userCreationRequest, error) {
+	defer r.Close()
+
+	var request userCreationRequest
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&request); err != nil {
+		return nil, fmt.Errorf("Unable to decode user creation JSON object: %v", err)
+	}
+
+	return &request, nil
+}
+
+type userModificationRequest struct {
+	Username          *string `json:"username"`
+	Password          *string `json:"password"`
+	IsAdmin           *bool   `json:"is_admin"`
+	Theme             *string `json:"theme"`
+	Language          *string `json:"language"`
+	Timezone          *string `json:"timezone"`
+	EntryDirection    *string `json:"entry_sorting_direction"`
+	Stylesheet        *string `json:"stylesheet"`
+	GoogleID          *string `json:"google_id"`
+	OpenIDConnectID   *string `json:"openid_connect_id"`
+	EntriesPerPage    *int    `json:"entries_per_page"`
+	KeyboardShortcuts *bool   `json:"keyboard_shortcuts"`
+	ShowReadingTime   *bool   `json:"show_reading_time"`
+	EntrySwipe        *bool   `json:"entry_swipe"`
+}
+
+func (u *userModificationRequest) Update(user *model.User) {
+	if u.Username != nil {
+		user.Username = *u.Username
+	}
+
+	if u.Password != nil {
+		user.Password = *u.Password
+	}
+
+	if u.IsAdmin != nil {
+		user.IsAdmin = *u.IsAdmin
+	}
+
+	if u.Theme != nil {
+		user.Theme = *u.Theme
+	}
+
+	if u.Language != nil {
+		user.Language = *u.Language
+	}
+
+	if u.Timezone != nil {
+		user.Timezone = *u.Timezone
+	}
+
+	if u.EntryDirection != nil {
+		user.EntryDirection = *u.EntryDirection
+	}
+
+	if u.Stylesheet != nil {
+		user.Stylesheet = *u.Stylesheet
+	}
+
+	if u.GoogleID != nil {
+		user.GoogleID = *u.GoogleID
+	}
+
+	if u.OpenIDConnectID != nil {
+		user.OpenIDConnectID = *u.OpenIDConnectID
+	}
+
+	if u.EntriesPerPage != nil {
+		user.EntriesPerPage = *u.EntriesPerPage
+	}
+
+	if u.KeyboardShortcuts != nil {
+		user.KeyboardShortcuts = *u.KeyboardShortcuts
+	}
+
+	if u.ShowReadingTime != nil {
+		user.ShowReadingTime = *u.ShowReadingTime
+	}
+
+	if u.EntrySwipe != nil {
+		user.EntrySwipe = *u.EntrySwipe
+	}
+}
+
+func decodeUserModificationRequest(r io.ReadCloser) (*userModificationRequest, error) {
+	defer r.Close()
+
+	var request userModificationRequest
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&request); err != nil {
+		return nil, fmt.Errorf("Unable to decode user modification JSON object: %v", err)
+	}
+
+	return &request, nil
+}
+
+func decodeEntryStatusRequest(r io.ReadCloser) ([]int64, string, error) {
 	type payload struct {
 		EntryIDs []int64 `json:"entry_ids"`
 		Status   string  `json:"status"`
@@ -66,42 +288,18 @@ func decodeEntryStatusPayload(r io.ReadCloser) ([]int64, string, error) {
 	return p.EntryIDs, p.Status, nil
 }
 
-func decodeFeedCreationPayload(r io.ReadCloser) (string, int64, error) {
-	type payload struct {
-		FeedURL    string `json:"feed_url"`
-		CategoryID int64  `json:"category_id"`
-	}
-
-	var p payload
-	decoder := json.NewDecoder(r)
-	defer r.Close()
-	if err := decoder.Decode(&p); err != nil {
-		return "", 0, fmt.Errorf("invalid JSON payload: %v", err)
-	}
-
-	return p.FeedURL, p.CategoryID, nil
+type categoryRequest struct {
+	Title string `json:"title"`
 }
 
-func decodeFeedModificationPayload(r io.ReadCloser) (*model.Feed, error) {
-	var feed model.Feed
+func decodeCategoryRequest(r io.ReadCloser) (*categoryRequest, error) {
+	var payload categoryRequest
 
 	decoder := json.NewDecoder(r)
 	defer r.Close()
-	if err := decoder.Decode(&feed); err != nil {
-		return nil, fmt.Errorf("Unable to decode feed JSON object: %v", err)
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, fmt.Errorf("Unable to decode JSON object: %v", err)
 	}
 
-	return &feed, nil
-}
-
-func decodeCategoryPayload(r io.ReadCloser) (*model.Category, error) {
-	var category model.Category
-
-	decoder := json.NewDecoder(r)
-	defer r.Close()
-	if err := decoder.Decode(&category); err != nil {
-		return nil, fmt.Errorf("Unable to decode category JSON object: %v", err)
-	}
-
-	return &category, nil
+	return &payload, nil
 }

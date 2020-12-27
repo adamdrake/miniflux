@@ -2,24 +2,21 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/json"
 )
 
-// FlushHistory changes all "read" items to "removed".
-func (c *Controller) FlushHistory(w http.ResponseWriter, r *http.Request) {
-	err := c.store.FlushHistory(context.New(r).UserID())
+func (h *handler) flushHistory(w http.ResponseWriter, r *http.Request) {
+	err := h.store.FlushHistory(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	response.Redirect(w, r, route.Path(c.router, "history"))
+	json.OK(w, r, "OK")
 }

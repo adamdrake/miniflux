@@ -2,59 +2,66 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/reader/subscription"
-	"github.com/miniflux/miniflux/ui/form"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/config"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/logger"
+	"miniflux.app/reader/subscription"
+	"miniflux.app/ui/form"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// SubmitSubscription try to find a feed from the URL provided by the user.
-func (c *Controller) SubmitSubscription(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	sess := session.New(c.store, ctx)
-	v := view.New(c.tpl, ctx, sess)
+func (h *handler) submitSubscription(w http.ResponseWriter, r *http.Request) {
+	sess := session.New(h.store, request.SessionID(r))
+	v := view.New(h.tpl, r, sess)
 
-	user, err := c.store.UserByID(ctx.UserID())
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	categories, err := c.store.Categories(user.ID)
+	categories, err := h.store.Categories(user.ID)
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	v.Set("categories", categories)
 	v.Set("menu", "feeds")
 	v.Set("user", user)
-	v.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	v.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	v.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
+	v.Set("defaultUserAgent", config.Opts.HTTPClientUserAgent())
+	v.Set("hasProxyConfigured", config.Opts.HasHTTPClientProxyConfigured())
 
 	subscriptionForm := form.NewSubscriptionForm(r)
 	if err := subscriptionForm.Validate(); err != nil {
 		v.Set("form", subscriptionForm)
 		v.Set("errorMessage", err.Error())
-		html.OK(w, v.Render("add_subscription"))
+		html.OK(w, r, v.Render("add_subscription"))
 		return
 	}
 
-	subscriptions, err := subscription.FindSubscriptions(subscriptionForm.URL)
-	if err != nil {
-		logger.Error("[Controller:SubmitSubscription] %v", err)
+	subscriptions, findErr := subscription.FindSubscriptions(
+		subscriptionForm.URL,
+		subscriptionForm.UserAgent,
+		subscriptionForm.Username,
+		subscriptionForm.Password,
+		subscriptionForm.FetchViaProxy,
+	)
+	if findErr != nil {
+		logger.Error("[UI:SubmitSubscription] %s", findErr)
 		v.Set("form", subscriptionForm)
-		v.Set("errorMessage", err)
-		html.OK(w, v.Render("add_subscription"))
+		v.Set("errorMessage", findErr)
+		html.OK(w, r, v.Render("add_subscription"))
 		return
 	}
 
@@ -64,26 +71,41 @@ func (c *Controller) SubmitSubscription(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case n == 0:
 		v.Set("form", subscriptionForm)
-		v.Set("errorMessage", "Unable to find any subscription.")
-		html.OK(w, v.Render("add_subscription"))
+		v.Set("errorMessage", "error.subscription_not_found")
+		html.OK(w, r, v.Render("add_subscription"))
 	case n == 1:
-		feed, err := c.feedHandler.CreateFeed(user.ID, subscriptionForm.CategoryID, subscriptions[0].URL, subscriptionForm.Crawler)
+		feed, err := h.feedHandler.CreateFeed(
+			user.ID,
+			subscriptionForm.CategoryID,
+			subscriptions[0].URL,
+			subscriptionForm.Crawler,
+			subscriptionForm.UserAgent,
+			subscriptionForm.Username,
+			subscriptionForm.Password,
+			subscriptionForm.ScraperRules,
+			subscriptionForm.RewriteRules,
+			subscriptionForm.BlocklistRules,
+			subscriptionForm.KeeplistRules,
+			subscriptionForm.FetchViaProxy,
+		)
 		if err != nil {
 			v.Set("form", subscriptionForm)
 			v.Set("errorMessage", err)
-			html.OK(w, v.Render("add_subscription"))
+			html.OK(w, r, v.Render("add_subscription"))
 			return
 		}
 
-		response.Redirect(w, r, route.Path(c.router, "feedEntries", "feedID", feed.ID))
+		html.Redirect(w, r, route.Path(h.router, "feedEntries", "feedID", feed.ID))
 	case n > 1:
-		v := view.New(c.tpl, ctx, sess)
+		v := view.New(h.tpl, r, sess)
 		v.Set("subscriptions", subscriptions)
-		v.Set("categoryID", subscriptionForm.CategoryID)
+		v.Set("form", subscriptionForm)
 		v.Set("menu", "feeds")
 		v.Set("user", user)
-		v.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+		v.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+		v.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
+		v.Set("hasProxyConfigured", config.Opts.HasHTTPClientProxyConfigured())
 
-		html.OK(w, v.Render("choose_subscription"))
+		html.OK(w, r, v.Render("choose_subscription"))
 	}
 }

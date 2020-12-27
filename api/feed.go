@@ -2,187 +2,205 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package api
+package api // import "miniflux.app/api"
 
 import (
 	"errors"
 	"net/http"
+	"time"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response/json"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/json"
 )
 
-// CreateFeed is the API handler to create a new feed.
-func (c *Controller) CreateFeed(w http.ResponseWriter, r *http.Request) {
-	feedURL, categoryID, err := decodeFeedCreationPayload(r.Body)
+func (h *handler) createFeed(w http.ResponseWriter, r *http.Request) {
+	feedInfo, err := decodeFeedCreationRequest(r.Body)
 	if err != nil {
-		json.BadRequest(w, err)
+		json.BadRequest(w, r, err)
 		return
 	}
 
-	if feedURL == "" {
-		json.BadRequest(w, errors.New("The feed_url is required"))
+	if feedInfo.FeedURL == "" {
+		json.BadRequest(w, r, errors.New("The feed_url is required"))
 		return
 	}
 
-	if categoryID <= 0 {
-		json.BadRequest(w, errors.New("The category_id is required"))
+	if feedInfo.CategoryID <= 0 {
+		json.BadRequest(w, r, errors.New("The category_id is required"))
 		return
 	}
 
-	ctx := context.New(r)
-	userID := ctx.UserID()
+	userID := request.UserID(r)
 
-	if c.store.FeedURLExists(userID, feedURL) {
-		json.BadRequest(w, errors.New("This feed_url already exists"))
+	if h.store.FeedURLExists(userID, feedInfo.FeedURL) {
+		json.BadRequest(w, r, errors.New("This feed_url already exists"))
 		return
 	}
 
-	if !c.store.CategoryExists(userID, categoryID) {
-		json.BadRequest(w, errors.New("This category_id doesn't exists or doesn't belongs to this user"))
+	if !h.store.CategoryExists(userID, feedInfo.CategoryID) {
+		json.BadRequest(w, r, errors.New("This category_id doesn't exists or doesn't belongs to this user"))
 		return
 	}
 
-	feed, err := c.feedHandler.CreateFeed(userID, categoryID, feedURL, false)
+	feed, err := h.feedHandler.CreateFeed(
+		userID,
+		feedInfo.CategoryID,
+		feedInfo.FeedURL,
+		feedInfo.Crawler,
+		feedInfo.UserAgent,
+		feedInfo.Username,
+		feedInfo.Password,
+		feedInfo.ScraperRules,
+		feedInfo.RewriteRules,
+		feedInfo.BlocklistRules,
+		feedInfo.KeeplistRules,
+		feedInfo.FetchViaProxy,
+	)
 	if err != nil {
-		json.ServerError(w, errors.New("Unable to create this feed"))
+		json.ServerError(w, r, err)
 		return
 	}
 
-	type result struct {
-		FeedID int64 `json:"feed_id"`
-	}
-
-	json.Created(w, &result{FeedID: feed.ID})
+	json.Created(w, r, &feedCreationResponse{FeedID: feed.ID})
 }
 
-// RefreshFeed is the API handler to refresh a feed.
-func (c *Controller) RefreshFeed(w http.ResponseWriter, r *http.Request) {
-	feedID, err := request.IntParam(r, "feedID")
+func (h *handler) refreshFeed(w http.ResponseWriter, r *http.Request) {
+	feedID := request.RouteInt64Param(r, "feedID")
+	userID := request.UserID(r)
+
+	if !h.store.FeedExists(userID, feedID) {
+		json.NotFound(w, r)
+		return
+	}
+
+	err := h.feedHandler.RefreshFeed(userID, feedID)
 	if err != nil {
-		json.BadRequest(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	ctx := context.New(r)
-	userID := ctx.UserID()
-
-	if !c.store.FeedExists(userID, feedID) {
-		json.NotFound(w, errors.New("Unable to find this feed"))
-		return
-	}
-
-	err = c.feedHandler.RefreshFeed(userID, feedID)
-	if err != nil {
-		json.ServerError(w, errors.New("Unable to refresh this feed"))
-		return
-	}
-
-	json.NoContent(w)
+	json.NoContent(w, r)
 }
 
-// UpdateFeed is the API handler that is used to update a feed.
-func (c *Controller) UpdateFeed(w http.ResponseWriter, r *http.Request) {
-	feedID, err := request.IntParam(r, "feedID")
+func (h *handler) refreshAllFeeds(w http.ResponseWriter, r *http.Request) {
+	userID := request.UserID(r)
+	jobs, err := h.store.NewUserBatch(userID, h.store.CountFeeds(userID))
 	if err != nil {
-		json.BadRequest(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	newFeed, err := decodeFeedModificationPayload(r.Body)
+	go func() {
+		h.pool.Push(jobs)
+	}()
+
+	json.NoContent(w, r)
+}
+
+func (h *handler) updateFeed(w http.ResponseWriter, r *http.Request) {
+	feedID := request.RouteInt64Param(r, "feedID")
+	feedChanges, err := decodeFeedModificationRequest(r.Body)
 	if err != nil {
-		json.BadRequest(w, err)
+		json.BadRequest(w, r, err)
 		return
 	}
 
-	ctx := context.New(r)
-	userID := ctx.UserID()
+	userID := request.UserID(r)
 
-	if newFeed.Category != nil && newFeed.Category.ID != 0 && !c.store.CategoryExists(userID, newFeed.Category.ID) {
-		json.BadRequest(w, errors.New("This category_id doesn't exists or doesn't belongs to this user"))
-		return
-	}
-
-	originalFeed, err := c.store.FeedByID(userID, feedID)
+	originalFeed, err := h.store.FeedByID(userID, feedID)
 	if err != nil {
-		json.NotFound(w, errors.New("Unable to find this feed"))
+		json.NotFound(w, r)
 		return
 	}
 
 	if originalFeed == nil {
-		json.NotFound(w, errors.New("Feed not found"))
+		json.NotFound(w, r)
 		return
 	}
 
-	originalFeed.Merge(newFeed)
-	if err := c.store.UpdateFeed(originalFeed); err != nil {
-		json.ServerError(w, errors.New("Unable to update this feed"))
+	feedChanges.Update(originalFeed)
+
+	if !h.store.CategoryExists(userID, originalFeed.Category.ID) {
+		json.BadRequest(w, r, errors.New("This category_id doesn't exists or doesn't belongs to this user"))
 		return
 	}
 
-	originalFeed, err = c.store.FeedByID(userID, feedID)
+	if err := h.store.UpdateFeed(originalFeed); err != nil {
+		json.ServerError(w, r, err)
+		return
+	}
+
+	originalFeed, err = h.store.FeedByID(userID, feedID)
 	if err != nil {
-		json.ServerError(w, errors.New("Unable to fetch this feed"))
+		json.ServerError(w, r, err)
 		return
 	}
 
-	json.Created(w, originalFeed)
+	json.Created(w, r, originalFeed)
 }
 
-// GetFeeds is the API handler that get all feeds that belongs to the given user.
-func (c *Controller) GetFeeds(w http.ResponseWriter, r *http.Request) {
-	feeds, err := c.store.Feeds(context.New(r).UserID())
-	if err != nil {
-		json.ServerError(w, errors.New("Unable to fetch feeds from the database"))
-		return
-	}
+func (h *handler) markFeedAsRead(w http.ResponseWriter, r *http.Request) {
+	feedID := request.RouteInt64Param(r, "feedID")
+	userID := request.UserID(r)
 
-	json.OK(w, feeds)
-}
-
-// GetFeed is the API handler to get a feed.
-func (c *Controller) GetFeed(w http.ResponseWriter, r *http.Request) {
-	feedID, err := request.IntParam(r, "feedID")
+	feed, err := h.store.FeedByID(userID, feedID)
 	if err != nil {
-		json.BadRequest(w, err)
-		return
-	}
-
-	feed, err := c.store.FeedByID(context.New(r).UserID(), feedID)
-	if err != nil {
-		json.ServerError(w, errors.New("Unable to fetch this feed"))
+		json.NotFound(w, r)
 		return
 	}
 
 	if feed == nil {
-		json.NotFound(w, errors.New("Feed not found"))
+		json.NotFound(w, r)
 		return
 	}
 
-	json.OK(w, feed)
+	if err := h.store.MarkFeedAsRead(userID, feedID, time.Now()); err != nil {
+		json.ServerError(w, r, err)
+		return
+	}
+
+	json.NoContent(w, r)
 }
 
-// RemoveFeed is the API handler to remove a feed.
-func (c *Controller) RemoveFeed(w http.ResponseWriter, r *http.Request) {
-	feedID, err := request.IntParam(r, "feedID")
+func (h *handler) getFeeds(w http.ResponseWriter, r *http.Request) {
+	feeds, err := h.store.Feeds(request.UserID(r))
 	if err != nil {
-		json.BadRequest(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	ctx := context.New(r)
-	userID := ctx.UserID()
+	json.OK(w, r, feeds)
+}
 
-	if !c.store.FeedExists(userID, feedID) {
-		json.NotFound(w, errors.New("Feed not found"))
+func (h *handler) getFeed(w http.ResponseWriter, r *http.Request) {
+	feedID := request.RouteInt64Param(r, "feedID")
+	feed, err := h.store.FeedByID(request.UserID(r), feedID)
+	if err != nil {
+		json.ServerError(w, r, err)
 		return
 	}
 
-	if err := c.store.RemoveFeed(userID, feedID); err != nil {
-		json.ServerError(w, errors.New("Unable to remove this feed"))
+	if feed == nil {
+		json.NotFound(w, r)
 		return
 	}
 
-	json.NoContent(w)
+	json.OK(w, r, feed)
+}
+
+func (h *handler) removeFeed(w http.ResponseWriter, r *http.Request) {
+	feedID := request.RouteInt64Param(r, "feedID")
+	userID := request.UserID(r)
+
+	if !h.store.FeedExists(userID, feedID) {
+		json.NotFound(w, r)
+		return
+	}
+
+	if err := h.store.RemoveFeed(userID, feedID); err != nil {
+		json.ServerError(w, r, err)
+		return
+	}
+
+	json.NoContent(w, r)
 }

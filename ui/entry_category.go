@@ -2,89 +2,76 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/model"
+	"miniflux.app/storage"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// ShowCategoryEntry shows a single feed entry in "category" mode.
-func (c *Controller) ShowCategoryEntry(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) showCategoryEntryPage(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	categoryID, err := request.IntParam(r, "categoryID")
-	if err != nil {
-		html.BadRequest(w, err)
-		return
-	}
+	categoryID := request.RouteInt64Param(r, "categoryID")
+	entryID := request.RouteInt64Param(r, "entryID")
 
-	entryID, err := request.IntParam(r, "entryID")
-	if err != nil {
-		html.BadRequest(w, err)
-		return
-	}
-
-	builder := c.store.NewEntryQueryBuilder(user.ID)
+	builder := h.store.NewEntryQueryBuilder(user.ID)
 	builder.WithCategoryID(categoryID)
 	builder.WithEntryID(entryID)
 	builder.WithoutStatus(model.EntryStatusRemoved)
 
 	entry, err := builder.GetEntry()
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if entry == nil {
-		html.NotFound(w)
+		html.NotFound(w, r)
 		return
 	}
 
 	if entry.Status == model.EntryStatusUnread {
-		err = c.store.SetEntriesStatus(user.ID, []int64{entry.ID}, model.EntryStatusRead)
+		err = h.store.SetEntriesStatus(user.ID, []int64{entry.ID}, model.EntryStatusRead)
 		if err != nil {
-			logger.Error("[Controller:ShowCategoryEntry] %v", err)
-			html.ServerError(w, nil)
+			html.ServerError(w, r, err)
 			return
 		}
+
+		entry.Status = model.EntryStatusRead
 	}
 
-	builder = c.store.NewEntryQueryBuilder(user.ID)
-	builder.WithCategoryID(categoryID)
-
-	prevEntry, nextEntry, err := c.getEntryPrevNext(user, builder, entry.ID)
+	entryPaginationBuilder := storage.NewEntryPaginationBuilder(h.store, user.ID, entry.ID, user.EntryDirection)
+	entryPaginationBuilder.WithCategoryID(categoryID)
+	prevEntry, nextEntry, err := entryPaginationBuilder.Entries()
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	nextEntryRoute := ""
 	if nextEntry != nil {
-		nextEntryRoute = route.Path(c.router, "categoryEntry", "categoryID", categoryID, "entryID", nextEntry.ID)
+		nextEntryRoute = route.Path(h.router, "categoryEntry", "categoryID", categoryID, "entryID", nextEntry.ID)
 	}
 
 	prevEntryRoute := ""
 	if prevEntry != nil {
-		prevEntryRoute = route.Path(c.router, "categoryEntry", "categoryID", categoryID, "entryID", prevEntry.ID)
+		prevEntryRoute = route.Path(h.router, "categoryEntry", "categoryID", categoryID, "entryID", prevEntry.ID)
 	}
 
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 	view.Set("entry", entry)
 	view.Set("prevEntry", prevEntry)
 	view.Set("nextEntry", nextEntry)
@@ -92,8 +79,9 @@ func (c *Controller) ShowCategoryEntry(w http.ResponseWriter, r *http.Request) {
 	view.Set("prevEntryRoute", prevEntryRoute)
 	view.Set("menu", "categories")
 	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
-	view.Set("hasSaveEntry", c.store.HasSaveEntry(user.ID))
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
+	view.Set("hasSaveEntry", h.store.HasSaveEntry(user.ID))
 
-	html.OK(w, view.Render("entry"))
+	html.OK(w, r, view.Render("entry"))
 }

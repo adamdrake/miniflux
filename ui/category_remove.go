@@ -2,49 +2,39 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
 )
 
-// RemoveCategory deletes a category from the database.
-func (c *Controller) RemoveCategory(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) removeCategory(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	categoryID, err := request.IntParam(r, "categoryID")
+	categoryID := request.RouteInt64Param(r, "categoryID")
+	category, err := h.store.Category(request.UserID(r), categoryID)
 	if err != nil {
-		html.BadRequest(w, err)
-		return
-	}
-
-	category, err := c.store.Category(ctx.UserID(), categoryID)
-	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if category == nil {
-		html.NotFound(w)
+		html.NotFound(w, r)
 		return
 	}
 
-	if err := c.store.RemoveCategory(user.ID, category.ID); err != nil {
-		html.ServerError(w, err)
+	if err := h.store.RemoveCategory(user.ID, category.ID); err != nil {
+		html.ServerError(w, r, err)
 		return
 	}
 
-	response.Redirect(w, r, route.Path(c.router, "categories"))
+	html.Redirect(w, r, route.Path(h.router, "categories"))
 }

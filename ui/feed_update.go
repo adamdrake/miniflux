@@ -2,79 +2,72 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/ui/form"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/config"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/logger"
+	"miniflux.app/ui/form"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// UpdateFeed update a subscription and redirect to the feed entries page.
-func (c *Controller) UpdateFeed(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) updateFeed(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	feedID, err := request.IntParam(r, "feedID")
+	feedID := request.RouteInt64Param(r, "feedID")
+	feed, err := h.store.FeedByID(user.ID, feedID)
 	if err != nil {
-		html.BadRequest(w, err)
-		return
-	}
-
-	feed, err := c.store.FeedByID(user.ID, feedID)
-	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if feed == nil {
-		html.NotFound(w)
+		html.NotFound(w, r)
 		return
 	}
 
-	categories, err := c.store.Categories(user.ID)
+	categories, err := h.store.Categories(user.ID)
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	feedForm := form.NewFeedForm(r)
 
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 	view.Set("form", feedForm)
 	view.Set("categories", categories)
 	view.Set("feed", feed)
 	view.Set("menu", "feeds")
 	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
+	view.Set("defaultUserAgent", config.Opts.HTTPClientUserAgent())
 
 	if err := feedForm.ValidateModification(); err != nil {
 		view.Set("errorMessage", err.Error())
-		html.OK(w, view.Render("edit_feed"))
+		html.OK(w, r, view.Render("edit_feed"))
 		return
 	}
 
-	err = c.store.UpdateFeed(feedForm.Merge(feed))
+	err = h.store.UpdateFeed(feedForm.Merge(feed))
 	if err != nil {
-		logger.Error("[Controller:EditFeed] %v", err)
-		view.Set("errorMessage", "Unable to update this feed.")
-		html.OK(w, view.Render("edit_feed"))
+		logger.Error("[UI:UpdateFeed] %v", err)
+		view.Set("errorMessage", "error.unable_to_update_feed")
+		html.OK(w, r, view.Render("edit_feed"))
 		return
 	}
 
-	response.Redirect(w, r, route.Path(c.router, "feedEntries", "feedID", feed.ID))
+	html.Redirect(w, r, route.Path(h.router, "feedEntries", "feedID", feed.ID))
 }

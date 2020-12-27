@@ -2,50 +2,43 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/ui/form"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/ui/form"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
 // EditUser shows the form to edit a user.
-func (c *Controller) EditUser(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+func (h *handler) showEditUserPage(w http.ResponseWriter, r *http.Request) {
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 
-	user, err := c.store.UserByID(ctx.UserID())
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if !user.IsAdmin {
-		html.Forbidden(w)
+		html.Forbidden(w, r)
 		return
 	}
 
-	userID, err := request.IntParam(r, "userID")
+	userID := request.RouteInt64Param(r, "userID")
+	selectedUser, err := h.store.UserByID(userID)
 	if err != nil {
-		html.BadRequest(w, err)
-		return
-	}
-
-	selectedUser, err := c.store.UserByID(userID)
-	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if selectedUser == nil {
-		html.NotFound(w)
+		html.NotFound(w, r)
 		return
 	}
 
@@ -58,7 +51,8 @@ func (c *Controller) EditUser(w http.ResponseWriter, r *http.Request) {
 	view.Set("selected_user", selectedUser)
 	view.Set("menu", "settings")
 	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
 
-	html.OK(w, view.Render("edit_user"))
+	html.OK(w, r, view.Render("edit_user"))
 }

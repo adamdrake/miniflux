@@ -2,42 +2,35 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package api
+package api // import "miniflux.app/api"
 
 import (
-	"errors"
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response/json"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/json"
 )
 
-// FeedIcon returns a feed icon.
-func (c *Controller) FeedIcon(w http.ResponseWriter, r *http.Request) {
-	feedID, err := request.IntParam(r, "feedID")
-	if err != nil {
-		json.BadRequest(w, err)
+func (h *handler) feedIcon(w http.ResponseWriter, r *http.Request) {
+	feedID := request.RouteInt64Param(r, "feedID")
+
+	if !h.store.HasIcon(feedID) {
+		json.NotFound(w, r)
 		return
 	}
 
-	if !c.store.HasIcon(feedID) {
-		json.NotFound(w, errors.New("This feed doesn't have any icon"))
-		return
-	}
-
-	icon, err := c.store.IconByFeedID(context.New(r).UserID(), feedID)
+	icon, err := h.store.IconByFeedID(request.UserID(r), feedID)
 	if err != nil {
-		json.ServerError(w, errors.New("Unable to fetch feed icon"))
+		json.ServerError(w, r, err)
 		return
 	}
 
 	if icon == nil {
-		json.NotFound(w, errors.New("This feed doesn't have any icon"))
+		json.NotFound(w, r)
 		return
 	}
 
-	json.OK(w, &feedIcon{
+	json.OK(w, r, &feedIconResponse{
 		ID:       icon.ID,
 		MimeType: icon.MimeType,
 		Data:     icon.DataURL(),

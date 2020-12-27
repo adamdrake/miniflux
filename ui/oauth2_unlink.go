@@ -2,56 +2,60 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/ui/session"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/locale"
+	"miniflux.app/logger"
+	"miniflux.app/ui/session"
 )
 
-// OAuth2Unlink unlink an account from the external provider.
-func (c *Controller) OAuth2Unlink(w http.ResponseWriter, r *http.Request) {
-	provider := request.Param(r, "provider", "")
+func (h *handler) oauth2Unlink(w http.ResponseWriter, r *http.Request) {
+	printer := locale.NewPrinter(request.UserLanguage(r))
+	provider := request.RouteStringParam(r, "provider")
 	if provider == "" {
 		logger.Info("[OAuth2] Invalid or missing provider")
-		response.Redirect(w, r, route.Path(c.router, "login"))
+		html.Redirect(w, r, route.Path(h.router, "login"))
 		return
 	}
 
-	authProvider, err := getOAuth2Manager(c.cfg).Provider(provider)
+	authProvider, err := getOAuth2Manager(r.Context()).FindProvider(provider)
 	if err != nil {
 		logger.Error("[OAuth2] %v", err)
-		response.Redirect(w, r, route.Path(c.router, "settings"))
+		html.Redirect(w, r, route.Path(h.router, "settings"))
 		return
 	}
 
-	ctx := context.New(r)
-	sess := session.New(c.store, ctx)
-
-	hasPassword, err := c.store.HasPassword(ctx.UserID())
+	sess := session.New(h.store, request.SessionID(r))
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
+		return
+	}
+
+	hasPassword, err := h.store.HasPassword(request.UserID(r))
+	if err != nil {
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if !hasPassword {
-		sess.NewFlashErrorMessage(c.translator.GetLanguage(ctx.UserLanguage()).Get("You must define a password otherwise you won't be able to login again."))
-		response.Redirect(w, r, route.Path(c.router, "settings"))
+		sess.NewFlashErrorMessage(printer.Printf("error.unlink_account_without_password"))
+		html.Redirect(w, r, route.Path(h.router, "settings"))
 		return
 	}
 
-	if err := c.store.RemoveExtraField(ctx.UserID(), authProvider.GetUserExtraKey()); err != nil {
-		html.ServerError(w, err)
+	authProvider.UnsetUserProfileID(user)
+	if err := h.store.UpdateUser(user); err != nil {
+		html.ServerError(w, r, err)
 		return
 	}
 
-	sess.NewFlashMessage(c.translator.GetLanguage(ctx.UserLanguage()).Get("Your external account is now dissociated!"))
-	response.Redirect(w, r, route.Path(c.router, "settings"))
+	sess.NewFlashMessage(printer.Printf("alert.account_unlinked"))
+	html.Redirect(w, r, route.Path(h.router, "settings"))
 }

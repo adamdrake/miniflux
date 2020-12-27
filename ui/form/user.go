@@ -2,13 +2,13 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package form
+package form // import "miniflux.app/ui/form"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/errors"
+	"miniflux.app/model"
 )
 
 // UserForm represents the user form.
@@ -22,15 +22,15 @@ type UserForm struct {
 // ValidateCreation validates user creation.
 func (u UserForm) ValidateCreation() error {
 	if u.Username == "" || u.Password == "" || u.Confirmation == "" {
-		return errors.NewLocalizedError("All fields are mandatory.")
+		return errors.NewLocalizedError("error.fields_mandatory")
 	}
 
 	if u.Password != u.Confirmation {
-		return errors.NewLocalizedError("Passwords are not the same.")
+		return errors.NewLocalizedError("error.different_passwords")
 	}
 
 	if len(u.Password) < 6 {
-		return errors.NewLocalizedError("You must use at least 6 characters.")
+		return errors.NewLocalizedError("error.password_min_length")
 	}
 
 	return nil
@@ -39,16 +39,16 @@ func (u UserForm) ValidateCreation() error {
 // ValidateModification validates user modification.
 func (u UserForm) ValidateModification() error {
 	if u.Username == "" {
-		return errors.NewLocalizedError("The username is mandatory.")
+		return errors.NewLocalizedError("error.user_mandatory_fields")
 	}
 
 	if u.Password != "" {
 		if u.Password != u.Confirmation {
-			return errors.NewLocalizedError("Passwords are not the same.")
+			return errors.NewLocalizedError("error.different_passwords")
 		}
 
 		if len(u.Password) < 6 {
-			return errors.NewLocalizedError("You must use at least 6 characters.")
+			return errors.NewLocalizedError("error.password_min_length")
 		}
 	}
 

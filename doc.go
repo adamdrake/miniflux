@@ -1,10 +1,10 @@
 // Copyright 2018 Frédéric Guillot. All rights reserved.
-// Use of this source code is governed by the MIT license
-// that can be found in the LICENSE file.
+// Use of this source code is governed by the Apache 2.0
+// license that can be found in the LICENSE file.
 
 /*
 
-Package main implements a feed reader application.
+Miniflux is a feed reader application.
 
 */
-package main
+package main // import "miniflux.app"

@@ -2,31 +2,39 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package form
+package form // import "miniflux.app/ui/form"
 
 import (
 	"net/http"
 	"strconv"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/errors"
+	"miniflux.app/model"
 )
 
 // FeedForm represents a feed form in the UI
 type FeedForm struct {
-	FeedURL      string
-	SiteURL      string
-	Title        string
-	ScraperRules string
-	RewriteRules string
-	Crawler      bool
-	CategoryID   int64
+	FeedURL         string
+	SiteURL         string
+	Title           string
+	ScraperRules    string
+	RewriteRules    string
+	BlocklistRules  string
+	KeeplistRules   string
+	Crawler         bool
+	UserAgent       string
+	CategoryID      int64
+	Username        string
+	Password        string
+	IgnoreHTTPCache bool
+	FetchViaProxy   bool
+	Disabled        bool
 }
 
 // ValidateModification validates FeedForm fields
 func (f FeedForm) ValidateModification() error {
 	if f.FeedURL == "" || f.SiteURL == "" || f.Title == "" || f.CategoryID == 0 {
-		return errors.NewLocalizedError("All fields are mandatory.")
+		return errors.NewLocalizedError("error.fields_mandatory")
 	}
 	return nil
 }
@@ -39,9 +47,17 @@ func (f FeedForm) Merge(feed *model.Feed) *model.Feed {
 	feed.FeedURL = f.FeedURL
 	feed.ScraperRules = f.ScraperRules
 	feed.RewriteRules = f.RewriteRules
+	feed.BlocklistRules = f.BlocklistRules
+	feed.KeeplistRules = f.KeeplistRules
 	feed.Crawler = f.Crawler
+	feed.UserAgent = f.UserAgent
 	feed.ParsingErrorCount = 0
 	feed.ParsingErrorMsg = ""
+	feed.Username = f.Username
+	feed.Password = f.Password
+	feed.IgnoreHTTPCache = f.IgnoreHTTPCache
+	feed.FetchViaProxy = f.FetchViaProxy
+	feed.Disabled = f.Disabled
 	return feed
 }
 
@@ -51,14 +67,21 @@ func NewFeedForm(r *http.Request) *FeedForm {
 	if err != nil {
 		categoryID = 0
 	}
-
 	return &FeedForm{
-		FeedURL:      r.FormValue("feed_url"),
-		SiteURL:      r.FormValue("site_url"),
-		Title:        r.FormValue("title"),
-		ScraperRules: r.FormValue("scraper_rules"),
-		RewriteRules: r.FormValue("rewrite_rules"),
-		Crawler:      r.FormValue("crawler") == "1",
-		CategoryID:   int64(categoryID),
+		FeedURL:         r.FormValue("feed_url"),
+		SiteURL:         r.FormValue("site_url"),
+		Title:           r.FormValue("title"),
+		ScraperRules:    r.FormValue("scraper_rules"),
+		UserAgent:       r.FormValue("user_agent"),
+		RewriteRules:    r.FormValue("rewrite_rules"),
+		BlocklistRules:  r.FormValue("blocklist_rules"),
+		KeeplistRules:   r.FormValue("keeplist_rules"),
+		Crawler:         r.FormValue("crawler") == "1",
+		CategoryID:      int64(categoryID),
+		Username:        r.FormValue("feed_username"),
+		Password:        r.FormValue("feed_password"),
+		IgnoreHTTPCache: r.FormValue("ignore_http_cache") == "1",
+		FetchViaProxy:   r.FormValue("fetch_via_proxy") == "1",
+		Disabled:        r.FormValue("disabled") == "1",
 	}
 }

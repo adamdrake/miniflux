@@ -2,13 +2,13 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package form
+package form // import "miniflux.app/ui/form"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/errors"
+	"miniflux.app/model"
 )
 
 // CategoryForm represents a feed form in the UI
@@ -19,7 +19,7 @@ type CategoryForm struct {
 // Validate makes sure the form values are valid.
 func (c CategoryForm) Validate() error {
 	if c.Title == "" {
-		return errors.NewLocalizedError("The title is mandatory.")
+		return errors.NewLocalizedError("error.title_required")
 	}
 	return nil
 }

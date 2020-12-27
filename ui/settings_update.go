@@ -2,38 +2,35 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/locale"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/ui/form"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/locale"
+	"miniflux.app/logger"
+	"miniflux.app/model"
+	"miniflux.app/ui/form"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// UpdateSettings update the settings.
-func (c *Controller) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+func (h *handler) updateSettings(w http.ResponseWriter, r *http.Request) {
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 
-	user, err := c.store.UserByID(ctx.UserID())
+	loggedUser, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	timezones, err := c.store.Timezones()
+	timezones, err := h.store.Timezones()
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
@@ -44,30 +41,32 @@ func (c *Controller) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	view.Set("languages", locale.AvailableLanguages())
 	view.Set("timezones", timezones)
 	view.Set("menu", "settings")
-	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	view.Set("user", loggedUser)
+	view.Set("countUnread", h.store.CountUnreadEntries(loggedUser.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(loggedUser.ID))
 
 	if err := settingsForm.Validate(); err != nil {
 		view.Set("errorMessage", err.Error())
-		html.OK(w, view.Render("settings"))
+		html.OK(w, r, view.Render("settings"))
 		return
 	}
 
-	if c.store.AnotherUserExists(user.ID, settingsForm.Username) {
-		view.Set("errorMessage", "This user already exists.")
-		html.OK(w, view.Render("settings"))
+	if h.store.AnotherUserExists(loggedUser.ID, settingsForm.Username) {
+		view.Set("errorMessage", "error.user_already_exists")
+		html.OK(w, r, view.Render("settings"))
 		return
 	}
 
-	err = c.store.UpdateUser(settingsForm.Merge(user))
+	err = h.store.UpdateUser(settingsForm.Merge(loggedUser))
 	if err != nil {
-		logger.Error("[Controller:UpdateSettings] %v", err)
-		view.Set("errorMessage", "Unable to update this user.")
-		html.OK(w, view.Render("settings"))
+		logger.Error("[UI:UpdateSettings] %v", err)
+		view.Set("errorMessage", "error.unable_to_update_user")
+		html.OK(w, r, view.Render("settings"))
 		return
 	}
 
-	sess.SetLanguage(user.Language)
-	sess.NewFlashMessage(c.translator.GetLanguage(ctx.UserLanguage()).Get("Preferences saved!"))
-	response.Redirect(w, r, route.Path(c.router, "settings"))
+	sess.SetLanguage(loggedUser.Language)
+	sess.SetTheme(loggedUser.Theme)
+	sess.NewFlashMessage(locale.NewPrinter(request.UserLanguage(r)).Printf("alert.prefs_saved"))
+	html.Redirect(w, r, route.Path(h.router, "settings"))
 }

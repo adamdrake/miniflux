@@ -2,23 +2,23 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package json
+package json // import "miniflux.app/reader/json"
 
 import (
 	"encoding/json"
 	"io"
 
-	"github.com/miniflux/miniflux/errors"
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/errors"
+	"miniflux.app/model"
 )
 
 // Parse returns a normalized feed struct from a JON feed.
-func Parse(data io.Reader) (*model.Feed, *errors.LocalizedError) {
+func Parse(baseURL string, data io.Reader) (*model.Feed, *errors.LocalizedError) {
 	feed := new(jsonFeed)
 	decoder := json.NewDecoder(data)
 	if err := decoder.Decode(&feed); err != nil {
 		return nil, errors.NewLocalizedError("Unable to parse JSON Feed: %q", err)
 	}
 
-	return feed.Transform(), nil
+	return feed.Transform(baseURL), nil
 }

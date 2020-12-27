@@ -2,48 +2,77 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package storage
+package storage // import "miniflux.app/storage"
 
 import (
 	"database/sql"
 	"fmt"
 
-	"github.com/miniflux/miniflux/crypto"
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/crypto"
+	"miniflux.app/model"
 )
 
-// CreateSession creates a new session.
-func (s *Storage) CreateSession() (*model.Session, error) {
-	session := model.Session{
-		ID:   crypto.GenerateRandomString(32),
-		Data: &model.SessionData{CSRF: crypto.GenerateRandomString(64)},
-	}
-
-	query := "INSERT INTO sessions (id, data) VALUES ($1, $2)"
-	_, err := s.db.Exec(query, session.ID, session.Data)
+// CreateAppSessionWithUserPrefs creates a new application session with the given user preferences.
+func (s *Storage) CreateAppSessionWithUserPrefs(userID int64) (*model.Session, error) {
+	user, err := s.UserByID(userID)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create session: %v", err)
+		return nil, err
 	}
 
-	return &session, nil
+	session := model.Session{
+		ID: crypto.GenerateRandomString(32),
+		Data: &model.SessionData{
+			CSRF:     crypto.GenerateRandomString(64),
+			Theme:    user.Theme,
+			Language: user.Language,
+		},
+	}
+
+	return s.createAppSession(&session)
 }
 
-// UpdateSessionField updates only one session field.
-func (s *Storage) UpdateSessionField(sessionID, field string, value interface{}) error {
-	query := `UPDATE sessions
-		SET data = jsonb_set(data, '{%s}', to_jsonb($1::text), true)
-		WHERE id=$2`
+// CreateAppSession creates a new application session.
+func (s *Storage) CreateAppSession() (*model.Session, error) {
+	session := model.Session{
+		ID: crypto.GenerateRandomString(32),
+		Data: &model.SessionData{
+			CSRF: crypto.GenerateRandomString(64),
+		},
+	}
 
+	return s.createAppSession(&session)
+}
+
+func (s *Storage) createAppSession(session *model.Session) (*model.Session, error) {
+	query := `INSERT INTO sessions (id, data) VALUES ($1, $2)`
+	_, err := s.db.Exec(query, session.ID, session.Data)
+	if err != nil {
+		return nil, fmt.Errorf(`store: unable to create app session: %v`, err)
+	}
+
+	return session, nil
+}
+
+// UpdateAppSessionField updates only one session field.
+func (s *Storage) UpdateAppSessionField(sessionID, field string, value interface{}) error {
+	query := `
+		UPDATE
+			sessions
+		SET
+			data = jsonb_set(data, '{%s}', to_jsonb($1::text), true)
+		WHERE
+			id=$2
+	`
 	_, err := s.db.Exec(fmt.Sprintf(query, field), value, sessionID)
 	if err != nil {
-		return fmt.Errorf("unable to update session field: %v", err)
+		return fmt.Errorf(`store: unable to update session field: %v`, err)
 	}
 
 	return nil
 }
 
-// Session returns the given session.
-func (s *Storage) Session(id string) (*model.Session, error) {
+// AppSession returns the given session.
+func (s *Storage) AppSession(id string) (*model.Session, error) {
 	var session model.Session
 
 	query := "SELECT id, data FROM sessions WHERE id=$1"
@@ -52,13 +81,14 @@ func (s *Storage) Session(id string) (*model.Session, error) {
 		&session.Data,
 	)
 
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("session not found: %s", id)
-	} else if err != nil {
-		return nil, fmt.Errorf("unable to fetch session: %v", err)
+	switch {
+	case err == sql.ErrNoRows:
+		return nil, fmt.Errorf(`store: session not found: %s`, id)
+	case err != nil:
+		return nil, fmt.Errorf(`store: unable to fetch session: %v`, err)
+	default:
+		return &session, nil
 	}
-
-	return &session, nil
 }
 
 // FlushAllSessions removes all sessions from the database.
@@ -76,12 +106,15 @@ func (s *Storage) FlushAllSessions() (err error) {
 	return nil
 }
 
-// CleanOldSessions removes sessions older than 30 days.
-func (s *Storage) CleanOldSessions() int64 {
-	query := `DELETE FROM sessions
-		WHERE id IN (SELECT id FROM sessions WHERE created_at < now() - interval '30 days')`
-
-	result, err := s.db.Exec(query)
+// CleanOldSessions removes sessions older than specified days.
+func (s *Storage) CleanOldSessions(days int) int64 {
+	query := `
+		DELETE FROM
+			sessions
+		WHERE
+			id IN (SELECT id FROM sessions WHERE created_at < now() - interval '%d days')
+	`
+	result, err := s.db.Exec(fmt.Sprintf(query, days))
 	if err != nil {
 		return 0
 	}

@@ -2,18 +2,18 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package json
+package json // import "miniflux.app/reader/json"
 
 import (
 	"strings"
 	"time"
 
-	"github.com/miniflux/miniflux/crypto"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/reader/date"
-	"github.com/miniflux/miniflux/reader/sanitizer"
-	"github.com/miniflux/miniflux/url"
+	"miniflux.app/crypto"
+	"miniflux.app/logger"
+	"miniflux.app/model"
+	"miniflux.app/reader/date"
+	"miniflux.app/reader/sanitizer"
+	"miniflux.app/url"
 )
 
 type jsonFeed struct {
@@ -55,12 +55,22 @@ func (j *jsonFeed) GetAuthor() string {
 	return getAuthor(j.Author)
 }
 
-func (j *jsonFeed) Transform() *model.Feed {
-	feed := new(model.Feed)
-	feed.FeedURL = j.FeedURL
-	feed.SiteURL = j.SiteURL
-	feed.Title = strings.TrimSpace(j.Title)
+func (j *jsonFeed) Transform(baseURL string) *model.Feed {
+	var err error
 
+	feed := new(model.Feed)
+
+	feed.FeedURL, err = url.AbsoluteURL(baseURL, j.FeedURL)
+	if err != nil {
+		feed.FeedURL = j.FeedURL
+	}
+
+	feed.SiteURL, err = url.AbsoluteURL(baseURL, j.SiteURL)
+	if err != nil {
+		feed.SiteURL = j.SiteURL
+	}
+
+	feed.Title = strings.TrimSpace(j.Title)
 	if feed.Title == "" {
 		feed.Title = feed.SiteURL
 	}
@@ -136,6 +146,10 @@ func (j *jsonItem) GetEnclosures() model.EnclosureList {
 	enclosures := make(model.EnclosureList, 0)
 
 	for _, attachment := range j.Attachments {
+		if attachment.URL == "" {
+			continue
+		}
+
 		enclosures = append(enclosures, &model.Enclosure{
 			URL:      attachment.URL,
 			MimeType: attachment.MimeType,

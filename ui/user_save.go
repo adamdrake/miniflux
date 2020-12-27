@@ -2,64 +2,61 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/ui/form"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/logger"
+	"miniflux.app/ui/form"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// SaveUser validate and save the new user into the database.
-func (c *Controller) SaveUser(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) saveUser(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if !user.IsAdmin {
-		html.Forbidden(w)
+		html.Forbidden(w, r)
 		return
 	}
 
 	userForm := form.NewUserForm(r)
 
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 	view.Set("menu", "settings")
 	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
 	view.Set("form", userForm)
 
 	if err := userForm.ValidateCreation(); err != nil {
 		view.Set("errorMessage", err.Error())
-		html.OK(w, view.Render("create_user"))
+		html.OK(w, r, view.Render("create_user"))
 		return
 	}
 
-	if c.store.UserExists(userForm.Username) {
-		view.Set("errorMessage", "This user already exists.")
-		html.OK(w, view.Render("create_user"))
+	if h.store.UserExists(userForm.Username) {
+		view.Set("errorMessage", "error.user_already_exists")
+		html.OK(w, r, view.Render("create_user"))
 		return
 	}
 
 	newUser := userForm.ToUser()
-	if err := c.store.CreateUser(newUser); err != nil {
-		logger.Error("[Controller:SaveUser] %v", err)
-		view.Set("errorMessage", "Unable to create this user.")
-		html.OK(w, view.Render("create_user"))
+	if err := h.store.CreateUser(newUser); err != nil {
+		logger.Error("[UI:SaveUser] %v", err)
+		view.Set("errorMessage", "error.unable_to_create_user")
+		html.OK(w, r, view.Render("create_user"))
 		return
 	}
 
-	response.Redirect(w, r, route.Path(c.router, "users"))
+	html.Redirect(w, r, route.Path(h.router, "users"))
 }

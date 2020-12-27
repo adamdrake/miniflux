@@ -2,63 +2,105 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/reader/opml"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/config"
+	"miniflux.app/http/client"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
+	"miniflux.app/logger"
+	"miniflux.app/reader/opml"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// UploadOPML handles OPML file importation.
-func (c *Controller) UploadOPML(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) uploadOPML(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
-		logger.Error("[Controller:UploadOPML] %v", err)
-		response.Redirect(w, r, route.Path(c.router, "import"))
+		logger.Error("[UI:UploadOPML] %v", err)
+		html.Redirect(w, r, route.Path(h.router, "import"))
 		return
 	}
 	defer file.Close()
 
-	logger.Info(
-		"[Controller:UploadOPML] User #%d uploaded this file: %s (%d bytes)",
+	logger.Debug(
+		"[UI:UploadOPML] User #%d uploaded this file: %s (%d bytes)",
 		user.ID,
 		fileHeader.Filename,
 		fileHeader.Size,
 	)
 
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 	view.Set("menu", "feeds")
 	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
 
 	if fileHeader.Size == 0 {
-		view.Set("errorMessage", "This file is empty")
-		html.OK(w, view.Render("import"))
+		view.Set("errorMessage", "error.empty_file")
+		html.OK(w, r, view.Render("import"))
 		return
 	}
 
-	if impErr := opml.NewHandler(c.store).Import(user.ID, file); impErr != nil {
+	if impErr := opml.NewHandler(h.store).Import(user.ID, file); impErr != nil {
 		view.Set("errorMessage", impErr)
-		html.OK(w, view.Render("import"))
+		html.OK(w, r, view.Render("import"))
 		return
 	}
 
-	response.Redirect(w, r, route.Path(c.router, "feeds"))
+	html.Redirect(w, r, route.Path(h.router, "feeds"))
+}
+
+func (h *handler) fetchOPML(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
+	if err != nil {
+		html.ServerError(w, r, err)
+		return
+	}
+
+	url := r.FormValue("url")
+	if url == "" {
+		html.Redirect(w, r, route.Path(h.router, "import"))
+		return
+	}
+
+	logger.Debug(
+		"[UI:FetchOPML] User #%d fetching this URL: %s",
+		user.ID,
+		url,
+	)
+
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
+	view.Set("menu", "feeds")
+	view.Set("user", user)
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
+
+	clt := client.NewClientWithConfig(url, config.Opts)
+	resp, err := clt.Get()
+	if err != nil {
+		view.Set("errorMessage", err)
+		html.OK(w, r, view.Render("import"))
+		return
+	}
+
+	if impErr := opml.NewHandler(h.store).Import(user.ID, resp.Body); impErr != nil {
+		view.Set("errorMessage", impErr)
+		html.OK(w, r, view.Render("import"))
+		return
+	}
+
+	html.Redirect(w, r, route.Path(h.router, "feeds"))
 }

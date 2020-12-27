@@ -2,52 +2,41 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
-	"errors"
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response/json"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/reader/sanitizer"
-	"github.com/miniflux/miniflux/reader/scraper"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/json"
+	"miniflux.app/model"
+	"miniflux.app/proxy"
+	"miniflux.app/reader/processor"
 )
 
-// FetchContent downloads the original HTML page and returns relevant contents.
-func (c *Controller) FetchContent(w http.ResponseWriter, r *http.Request) {
-	entryID, err := request.IntParam(r, "entryID")
-	if err != nil {
-		json.BadRequest(w, err)
-		return
-	}
-
-	ctx := context.New(r)
-	builder := c.store.NewEntryQueryBuilder(ctx.UserID())
+func (h *handler) fetchContent(w http.ResponseWriter, r *http.Request) {
+	entryID := request.RouteInt64Param(r, "entryID")
+	builder := h.store.NewEntryQueryBuilder(request.UserID(r))
 	builder.WithEntryID(entryID)
 	builder.WithoutStatus(model.EntryStatusRemoved)
 
 	entry, err := builder.GetEntry()
 	if err != nil {
-		json.ServerError(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
 	if entry == nil {
-		json.NotFound(w, errors.New("Entry not found"))
+		json.NotFound(w, r)
 		return
 	}
 
-	content, err := scraper.Fetch(entry.URL, entry.Feed.ScraperRules)
-	if err != nil {
-		json.ServerError(w, err)
+	if err := processor.ProcessEntryWebPage(entry); err != nil {
+		json.ServerError(w, r, err)
 		return
 	}
 
-	entry.Content = sanitizer.Sanitize(entry.URL, content)
-	c.store.UpdateEntryContent(entry)
+	h.store.UpdateEntryContent(entry)
 
-	json.Created(w, map[string]string{"content": entry.Content})
+	json.OK(w, r, map[string]string{"content": proxy.ImageProxyRewriter(h.router, entry.Content)})
 }

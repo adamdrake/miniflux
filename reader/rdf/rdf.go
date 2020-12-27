@@ -2,39 +2,45 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package rdf
+package rdf // import "miniflux.app/reader/rdf"
 
 import (
 	"encoding/xml"
 	"strings"
 	"time"
 
-	"github.com/miniflux/miniflux/crypto"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/reader/date"
-	"github.com/miniflux/miniflux/reader/sanitizer"
-	"github.com/miniflux/miniflux/url"
+	"miniflux.app/crypto"
+	"miniflux.app/logger"
+	"miniflux.app/model"
+	"miniflux.app/reader/date"
+	"miniflux.app/reader/sanitizer"
+	"miniflux.app/url"
 )
 
 type rdfFeed struct {
 	XMLName xml.Name  `xml:"RDF"`
 	Title   string    `xml:"channel>title"`
 	Link    string    `xml:"channel>link"`
-	Creator string    `xml:"channel>creator"`
 	Items   []rdfItem `xml:"item"`
+	DublinCoreFeedElement
 }
 
-func (r *rdfFeed) Transform() *model.Feed {
+func (r *rdfFeed) Transform(baseURL string) *model.Feed {
+	var err error
 	feed := new(model.Feed)
 	feed.Title = sanitizer.StripTags(r.Title)
-	feed.SiteURL = r.Link
+	feed.FeedURL = baseURL
+	feed.SiteURL, err = url.AbsoluteURL(baseURL, r.Link)
+	if err != nil {
+		feed.SiteURL = r.Link
+	}
 
 	for _, item := range r.Items {
 		entry := item.Transform()
-		if entry.Author == "" && r.Creator != "" {
-			entry.Author = sanitizer.StripTags(r.Creator)
+		if entry.Author == "" && r.DublinCoreCreator != "" {
+			entry.Author = strings.TrimSpace(r.DublinCoreCreator)
 		}
+		entry.Author = sanitizer.StripTags(entry.Author)
 
 		if entry.URL == "" {
 			entry.URL = feed.SiteURL
@@ -55,26 +61,46 @@ type rdfItem struct {
 	Title       string `xml:"title"`
 	Link        string `xml:"link"`
 	Description string `xml:"description"`
-	Creator     string `xml:"creator"`
-	Date        string `xml:"date"`
+	DublinCoreEntryElement
 }
 
 func (r *rdfItem) Transform() *model.Entry {
 	entry := new(model.Entry)
-	entry.Title = strings.TrimSpace(r.Title)
-	entry.Author = strings.TrimSpace(r.Creator)
-	entry.URL = r.Link
-	entry.Content = r.Description
-	entry.Hash = getHash(r)
-	entry.Date = getDate(r)
+	entry.Title = r.entryTitle()
+	entry.Author = r.entryAuthor()
+	entry.URL = r.entryURL()
+	entry.Content = r.entryContent()
+	entry.Hash = r.entryHash()
+	entry.Date = r.entryDate()
 	return entry
 }
 
-func getDate(r *rdfItem) time.Time {
-	if r.Date != "" {
-		result, err := date.Parse(r.Date)
+func (r *rdfItem) entryTitle() string {
+	return strings.TrimSpace(r.Title)
+}
+
+func (r *rdfItem) entryContent() string {
+	switch {
+	case r.DublinCoreContent != "":
+		return r.DublinCoreContent
+	default:
+		return r.Description
+	}
+}
+
+func (r *rdfItem) entryAuthor() string {
+	return strings.TrimSpace(r.DublinCoreCreator)
+}
+
+func (r *rdfItem) entryURL() string {
+	return strings.TrimSpace(r.Link)
+}
+
+func (r *rdfItem) entryDate() time.Time {
+	if r.DublinCoreDate != "" {
+		result, err := date.Parse(r.DublinCoreDate)
 		if err != nil {
-			logger.Error("rdf: %v", err)
+			logger.Error("rdf: %v (entry link = %s)", err, r.Link)
 			return time.Now()
 		}
 
@@ -84,7 +110,7 @@ func getDate(r *rdfItem) time.Time {
 	return time.Now()
 }
 
-func getHash(r *rdfItem) string {
+func (r *rdfItem) entryHash() string {
 	value := r.Link
 	if value == "" {
 		value = r.Title + r.Description

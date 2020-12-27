@@ -2,17 +2,21 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package cli
+package cli // import "miniflux.app/cli"
 
 import (
 	"fmt"
 	"runtime"
 
-	"github.com/miniflux/miniflux/version"
+	"miniflux.app/version"
 )
 
 func info() {
 	fmt.Println("Version:", version.Version)
+	fmt.Println("Commit:", version.Commit)
 	fmt.Println("Build Date:", version.BuildDate)
 	fmt.Println("Go Version:", runtime.Version())
+	fmt.Println("Compiler:", runtime.Compiler)
+	fmt.Println("Arch:", runtime.GOARCH)
+	fmt.Println("OS:", runtime.GOOS)
 }

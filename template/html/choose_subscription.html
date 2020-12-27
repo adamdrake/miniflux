@@ -1,39 +1,37 @@
-{{ define "title"}}{{ t "Choose a Subscription" }}{{ end }}
+{{ define "title"}}{{ t "page.add_feed.title" }}{{ end }}
 
 {{ define "content"}}
 <section class="page-header">
-    <h1>{{ t "New Subscription" }}</h1>
-    <ul>
-        <li>
-            <a href="{{ route "feeds" }}">{{ t "Feeds" }}</a>
-        </li>
-        <li>
-            <a href="{{ route "export" }}">{{ t "Export" }}</a>
-        </li>
-        <li>
-            <a href="{{ route "import" }}">{{ t "Import" }}</a>
-        </li>
-    </ul>
+    <h1>{{ t "page.add_feed.title" }}</h1>
+    {{ template "feed_menu" }}
 </section>
 
 <form action="{{ route "chooseSubscription" }}" method="POST">
     <input type="hidden" name="csrf" value="{{ .csrf }}">
-    <input type="hidden" name="category_id" value="{{ .categoryID }}">
+    <input type="hidden" name="category_id" value="{{ .form.CategoryID }}">
+    <input type="hidden" name="user_agent" value="{{ .form.UserAgent }}">
+    <input type="hidden" name="feed_username" value="{{ .form.Username }}">
+    <input type="hidden" name="feed_password" value="{{ .form.Password }}">
+    <input type="hidden" name="scraper_rules" value="{{ .form.ScraperRules }}">
+    <input type="hidden" name="rewrite_rules" value="{{ .form.RewriteRules }}">
+    {{ if .form.FetchViaProxy }}
+    <input type="hidden" name="fetch_via_proxy" value="1">
+    {{ end }}
+    {{ if .form.Crawler }}
+        <input type="hidden" name="crawler" value="1">
+    {{ end }}
 
-    <h3>{{ t "Choose a Subscription" }}</h3>
+    <h3>{{ t "page.add_feed.choose_feed" }}</h3>
 
     {{ range .subscriptions }}
         <div class="radio-group">
-            <label title="{{ .URL }}"><input type="radio" name="url" value="{{ .URL }}"> {{ .Title }}</label> ({{ .Type }})
-            <small title="Type = {{ .Type }}"><a href="{{ .URL }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ .URL }}</a></small>
+            <label title="{{ .URL | safeURL  }}"><input type="radio" name="url" value="{{ .URL | safeURL  }}"> {{ .Title }}</label> ({{ .Type }})
+            <small title="Type = {{ .Type }}"><a href="{{ .URL | safeURL  }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ .URL | safeURL  }}</a></small>
         </div>
     {{ end }}
 
-    <br>
-    <label><input type="checkbox" name="crawler" value="1" {{ if .form.Crawler }}checked{{ end }}> {{ t "Fetch original content" }}</label>
-
     <div class="buttons">
-        <button type="submit" class="button button-primary" data-label-loading="{{ t "Loading..." }}">{{ t "Subscribe" }}</button>
+        <button type="submit" class="button button-primary" data-label-loading="{{ t "form.submit.loading" }}">{{ t "action.subscribe" }}</button>
     </div>
 </form>
 {{ end }}

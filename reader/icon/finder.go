@@ -2,7 +2,7 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package icon
+package icon // import "miniflux.app/reader/icon"
 
 import (
 	"encoding/base64"
@@ -11,19 +11,23 @@ import (
 	"io/ioutil"
 	"strings"
 
-	"github.com/miniflux/miniflux/crypto"
-	"github.com/miniflux/miniflux/http/client"
-	"github.com/miniflux/miniflux/logger"
-	"github.com/miniflux/miniflux/model"
-	"github.com/miniflux/miniflux/url"
+	"miniflux.app/config"
+	"miniflux.app/crypto"
+	"miniflux.app/http/client"
+	"miniflux.app/logger"
+	"miniflux.app/model"
+	"miniflux.app/url"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
 // FindIcon try to find the website's icon.
-func FindIcon(websiteURL string) (*model.Icon, error) {
+func FindIcon(websiteURL string, fetchViaProxy bool) (*model.Icon, error) {
 	rootURL := url.RootURL(websiteURL)
-	clt := client.New(rootURL)
+	clt := client.NewClientWithConfig(rootURL, config.Opts)
+	if fetchViaProxy {
+		clt.WithProxy()
+	}
 	response, err := clt.Get()
 	if err != nil {
 		return nil, fmt.Errorf("unable to download website index page: %v", err)
@@ -43,7 +47,7 @@ func FindIcon(websiteURL string) (*model.Icon, error) {
 	}
 
 	logger.Debug("[FindIcon] Fetching icon => %s", iconURL)
-	icon, err := downloadIcon(iconURL)
+	icon, err := downloadIcon(iconURL, fetchViaProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +72,7 @@ func parseDocument(websiteURL string, data io.Reader) (string, error) {
 	for _, query := range queries {
 		doc.Find(query).Each(func(i int, s *goquery.Selection) {
 			if href, exists := s.Attr("href"); exists {
-				iconURL = href
+				iconURL = strings.TrimSpace(href)
 			}
 		})
 
@@ -86,8 +90,11 @@ func parseDocument(websiteURL string, data io.Reader) (string, error) {
 	return iconURL, nil
 }
 
-func downloadIcon(iconURL string) (*model.Icon, error) {
-	clt := client.New(iconURL)
+func downloadIcon(iconURL string, fetchViaProxy bool) (*model.Icon, error) {
+	clt := client.NewClientWithConfig(iconURL, config.Opts)
+	if fetchViaProxy {
+		clt.WithProxy()
+	}
 	response, err := clt.Get()
 	if err != nil {
 		return nil, fmt.Errorf("unable to download iconURL: %v", err)

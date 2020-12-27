@@ -2,54 +2,50 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
+	"errors"
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/route"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/route"
 )
 
-// RemoveUser deletes a user from the database.
-func (c *Controller) RemoveUser(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) removeUser(w http.ResponseWriter, r *http.Request) {
+	loggedUser, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	if !user.IsAdmin {
-		html.Forbidden(w)
+	if !loggedUser.IsAdmin {
+		html.Forbidden(w, r)
 		return
 	}
 
-	userID, err := request.IntParam(r, "userID")
+	selectedUserID := request.RouteInt64Param(r, "userID")
+	selectedUser, err := h.store.UserByID(selectedUserID)
 	if err != nil {
-		html.BadRequest(w, err)
-		return
-	}
-
-	selectedUser, err := c.store.UserByID(userID)
-	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
 	if selectedUser == nil {
-		html.NotFound(w)
+		html.NotFound(w, r)
 		return
 	}
 
-	if err := c.store.RemoveUser(selectedUser.ID); err != nil {
-		html.ServerError(w, err)
+	if selectedUser.ID == loggedUser.ID {
+		html.BadRequest(w, r, errors.New("You cannot remove yourself"))
 		return
 	}
 
-	response.Redirect(w, r, route.Path(c.router, "users"))
+	if err := h.store.RemoveUser(selectedUser.ID); err != nil {
+		html.ServerError(w, r, err)
+		return
+	}
+
+	html.Redirect(w, r, route.Path(h.router, "users"))
 }

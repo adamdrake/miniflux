@@ -2,16 +2,21 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package client
+package client // import "miniflux.app/http/client"
 
 import (
+	"bytes"
+	"fmt"
 	"io"
-	"mime"
+	"io/ioutil"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
-	"github.com/miniflux/miniflux/logger"
 	"golang.org/x/net/html/charset"
 )
+
+var xmlEncodingRegex = regexp.MustCompile(`<\?xml(.*)encoding=["'](.+)["'](.*)\?>`)
 
 // Response wraps a server response.
 type Response struct {
@@ -20,8 +25,32 @@ type Response struct {
 	EffectiveURL  string
 	LastModified  string
 	ETag          string
+	Expires       string
 	ContentType   string
 	ContentLength int64
+}
+
+func (r *Response) String() string {
+	return fmt.Sprintf(
+		`StatusCode=%d EffectiveURL=%q LastModified=%q ETag=%s Expires=%s ContentType=%q ContentLength=%d`,
+		r.StatusCode,
+		r.EffectiveURL,
+		r.LastModified,
+		r.ETag,
+		r.Expires,
+		r.ContentType,
+		r.ContentLength,
+	)
+}
+
+// IsNotFound returns true if the resource doesn't exists anymore.
+func (r *Response) IsNotFound() bool {
+	return r.StatusCode == 404 || r.StatusCode == 410
+}
+
+// IsNotAuthorized returns true if the resource require authentication.
+func (r *Response) IsNotAuthorized() bool {
+	return r.StatusCode == 401
 }
 
 // HasServerFailure returns true if the status code represents a failure.
@@ -46,23 +75,47 @@ func (r *Response) IsModified(etag, lastModified string) bool {
 	return true
 }
 
-// NormalizeBodyEncoding make sure the body is encoded in UTF-8.
+// EnsureUnicodeBody makes sure the body is encoded in UTF-8.
 //
 // If a charset other than UTF-8 is detected, we convert the document to UTF-8.
 // This is used by the scraper and feed readers.
 //
 // Do not forget edge cases:
-// - Some non-utf8 feeds specify encoding only in Content-Type, not in XML document.
-func (r *Response) NormalizeBodyEncoding() (io.Reader, error) {
-	_, params, err := mime.ParseMediaType(r.ContentType)
-	if err == nil {
-		if enc, found := params["charset"]; found {
-			enc = strings.ToLower(enc)
-			if enc != "utf-8" && enc != "utf8" && enc != "" {
-				logger.Debug("[NormalizeBodyEncoding] Convert body to UTF-8 from %s", enc)
-				return charset.NewReader(r.Body, r.ContentType)
-			}
+//
+// - Feeds with encoding specified only in Content-Type header and not in XML document
+// - Feeds with encoding specified in both places
+// - Feeds with encoding specified only in XML document and not in HTTP header
+// - Feeds with wrong encoding defined and already in UTF-8
+func (r *Response) EnsureUnicodeBody() (err error) {
+	buffer, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+
+	r.Body = bytes.NewReader(buffer)
+	if utf8.Valid(buffer) {
+		return nil
+	}
+
+	if strings.Contains(r.ContentType, "xml") {
+		// We ignore documents with encoding specified in XML prolog.
+		// This is going to be handled by the XML parser.
+		length := 1024
+		if len(buffer) < 1024 {
+			length = len(buffer)
+		}
+
+		if xmlEncodingRegex.Match(buffer[0:length]) {
+			return nil
 		}
 	}
-	return r.Body, nil
+
+	r.Body, err = charset.NewReader(r.Body, r.ContentType)
+	return err
+}
+
+// BodyAsString returns the response body as string.
+func (r *Response) BodyAsString() string {
+	bytes, _ := ioutil.ReadAll(r.Body)
+	return string(bytes)
 }

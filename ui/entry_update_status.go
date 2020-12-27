@@ -2,38 +2,33 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"errors"
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response/json"
-	"github.com/miniflux/miniflux/logger"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/json"
 )
 
-// UpdateEntriesStatus updates the status for a list of entries.
-func (c *Controller) UpdateEntriesStatus(w http.ResponseWriter, r *http.Request) {
+func (h *handler) updateEntriesStatus(w http.ResponseWriter, r *http.Request) {
 	entryIDs, status, err := decodeEntryStatusPayload(r.Body)
 	if err != nil {
-		logger.Error("[Controller:UpdateEntryStatus] %v", err)
-		json.BadRequest(w, nil)
+		json.BadRequest(w, r, err)
 		return
 	}
 
 	if len(entryIDs) == 0 {
-		json.BadRequest(w, errors.New("The list of entryID is empty"))
+		json.BadRequest(w, r, errors.New("The list of entry IDs is empty"))
 		return
 	}
 
-	ctx := context.New(r)
-	err = c.store.SetEntriesStatus(ctx.UserID(), entryIDs, status)
+	err = h.store.SetEntriesStatus(request.UserID(r), entryIDs, status)
 	if err != nil {
-		logger.Error("[Controller:UpdateEntryStatus] %v", err)
-		json.ServerError(w, nil)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	json.OK(w, "OK")
+	json.OK(w, r, "OK")
 }

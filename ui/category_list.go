@@ -2,40 +2,38 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/ui/session"
-	"github.com/miniflux/miniflux/ui/view"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/ui/session"
+	"miniflux.app/ui/view"
 )
 
-// CategoryList shows the page with all categories.
-func (c *Controller) CategoryList(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-
-	user, err := c.store.UserByID(ctx.UserID())
+func (h *handler) showCategoryListPage(w http.ResponseWriter, r *http.Request) {
+	user, err := h.store.UserByID(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	categories, err := c.store.CategoriesWithFeedCount(user.ID)
+	categories, err := h.store.CategoriesWithFeedCount(user.ID)
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	sess := session.New(c.store, ctx)
-	view := view.New(c.tpl, ctx, sess)
+	sess := session.New(h.store, request.SessionID(r))
+	view := view.New(h.tpl, r, sess)
 	view.Set("categories", categories)
 	view.Set("total", len(categories))
 	view.Set("menu", "categories")
 	view.Set("user", user)
-	view.Set("countUnread", c.store.CountUnreadEntries(user.ID))
+	view.Set("countUnread", h.store.CountUnreadEntries(user.ID))
+	view.Set("countErrorFeeds", h.store.CountUserFeedsWithErrors(user.ID))
 
-	html.OK(w, view.Render("categories"))
+	html.OK(w, r, view.Render("categories"))
 }

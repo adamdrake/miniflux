@@ -2,25 +2,23 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package ui
+package ui // import "miniflux.app/ui"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/response/html"
-	"github.com/miniflux/miniflux/http/response/xml"
-	"github.com/miniflux/miniflux/reader/opml"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/html"
+	"miniflux.app/http/response/xml"
+	"miniflux.app/reader/opml"
 )
 
-// Export generates the OPML file.
-func (c *Controller) Export(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	opml, err := opml.NewHandler(c.store).Export(ctx.UserID())
+func (h *handler) exportFeeds(w http.ResponseWriter, r *http.Request) {
+	opml, err := opml.NewHandler(h.store).Export(request.UserID(r))
 	if err != nil {
-		html.ServerError(w, err)
+		html.ServerError(w, r, err)
 		return
 	}
 
-	xml.Attachment(w, "feeds.opml", opml)
+	xml.Attachment(w, r, "feeds.opml", opml)
 }

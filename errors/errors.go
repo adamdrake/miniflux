@@ -2,12 +2,12 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package errors
+package errors // import "miniflux.app/errors"
 
 import (
 	"fmt"
 
-	"github.com/miniflux/miniflux/locale"
+	"miniflux.app/locale"
 )
 
 // LocalizedError represents an error than could be translated to another language.
@@ -22,8 +22,8 @@ func (l LocalizedError) Error() string {
 }
 
 // Localize returns the translated error message.
-func (l LocalizedError) Localize(translation *locale.Language) string {
-	return translation.Get(l.message, l.args...)
+func (l LocalizedError) Localize(printer *locale.Printer) string {
+	return printer.Printf(l.message, l.args...)
 }
 
 // NewLocalizedError returns a new LocalizedError.

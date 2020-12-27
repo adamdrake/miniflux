@@ -2,12 +2,14 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package oauth2
+package oauth2 // import "miniflux.app/oauth2"
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"miniflux.app/model"
 
 	"golang.org/x/oauth2"
 )
@@ -23,17 +25,16 @@ type googleProvider struct {
 	redirectURL  string
 }
 
-func (g googleProvider) GetUserExtraKey() string {
+func (g *googleProvider) GetUserExtraKey() string {
 	return "google_id"
 }
 
-func (g googleProvider) GetRedirectURL(state string) string {
+func (g *googleProvider) GetRedirectURL(state string) string {
 	return g.config().AuthCodeURL(state)
 }
 
-func (g googleProvider) GetProfile(code string) (*Profile, error) {
+func (g *googleProvider) GetProfile(ctx context.Context, code string) (*Profile, error) {
 	conf := g.config()
-	ctx := context.Background()
 	token, err := conf.Exchange(ctx, code)
 	if err != nil {
 		return nil, err
@@ -49,14 +50,22 @@ func (g googleProvider) GetProfile(code string) (*Profile, error) {
 	var user googleProfile
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(&user); err != nil {
-		return nil, fmt.Errorf("unable to unserialize google profile: %v", err)
+		return nil, fmt.Errorf("oauth2: unable to unserialize google profile: %v", err)
 	}
 
 	profile := &Profile{Key: g.GetUserExtraKey(), ID: user.Sub, Username: user.Email}
 	return profile, nil
 }
 
-func (g googleProvider) config() *oauth2.Config {
+func (g *googleProvider) PopulateUserWithProfileID(user *model.User, profile *Profile) {
+	user.GoogleID = profile.ID
+}
+
+func (g *googleProvider) UnsetUserProfileID(user *model.User) {
+	user.GoogleID = ""
+}
+
+func (g *googleProvider) config() *oauth2.Config {
 	return &oauth2.Config{
 		RedirectURL:  g.redirectURL,
 		ClientID:     g.clientID,

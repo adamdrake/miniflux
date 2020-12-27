@@ -1,35 +1,17 @@
-{{ define "title"}}{{ t "Sessions" }}{{ end }}
+{{ define "title"}}{{ t "page.sessions.title" }}{{ end }}
 
 {{ define "content"}}
 <section class="page-header">
-    <h1>{{ t "Sessions" }}</h1>
-    <ul>
-        <li>
-            <a href="{{ route "settings" }}">{{ t "Settings" }}</a>
-        </li>
-        <li>
-            <a href="{{ route "integrations" }}">{{ t "Integrations" }}</a>
-        </li>
-        {{ if .user.IsAdmin }}
-        <li>
-            <a href="{{ route "users" }}">{{ t "Users" }}</a>
-        </li>
-        <li>
-            <a href="{{ route "createUser" }}">{{ t "Add user" }}</a>
-        </li>
-        {{ end }}
-        <li>
-            <a href="{{ route "about" }}">{{ t "About" }}</a>
-        </li>
-    </ul>
+    <h1>{{ t "page.sessions.title" }}</h1>
+    {{ template "settings_menu" dict "user" .user }}
 </section>
 
 <table>
     <tr>
-        <th>{{ t "Date" }}</th>
-        <th>{{ t "IP Address" }}</th>
-        <th>{{ t "User Agent" }}</th>
-        <th>{{ t "Actions" }}</th>
+        <th>{{ t "page.sessions.table.date" }}</th>
+        <th>{{ t "page.sessions.table.ip" }}</th>
+        <th>{{ t "page.sessions.table.user_agent" }}</th>
+        <th>{{ t "page.sessions.table.actions" }}</th>
     </tr>
     {{ range .sessions }}
     <tr {{ if eq .Token $.currentSessionToken }}class="row-highlighted"{{ end }}>
@@ -38,15 +20,15 @@
         <td title="{{ .UserAgent }}">{{ .UserAgent }}</td>
         <td class="column-20">
             {{ if eq .Token $.currentSessionToken }}
-                {{ t "Current session" }}
+                {{ t "page.sessions.table.current_session" }}
             {{ else }}
                 <a href="#"
                     data-confirm="true"
-                    data-label-question="{{ t "Are you sure?" }}"
-                    data-label-yes="{{ t "yes" }}"
-                    data-label-no="{{ t "no" }}"
-                    data-label-loading="{{ t "Work in progress..." }}"
-                    data-url="{{ route "removeSession" "sessionID" .ID }}">{{ t "Remove" }}</a>
+                    data-label-question="{{ t "confirm.question" }}"
+                    data-label-yes="{{ t "confirm.yes" }}"
+                    data-label-no="{{ t "confirm.no" }}"
+                    data-label-loading="{{ t "confirm.loading" }}"
+                    data-url="{{ route "removeSession" "sessionID" .ID }}">{{ t "action.remove" }}</a>
             {{ end }}
         </td>
     </tr>

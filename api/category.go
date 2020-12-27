@@ -2,109 +2,128 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package api
+package api // import "miniflux.app/api"
 
 import (
 	"errors"
 	"net/http"
+	"time"
 
-	"github.com/miniflux/miniflux/http/context"
-	"github.com/miniflux/miniflux/http/request"
-	"github.com/miniflux/miniflux/http/response/json"
+	"miniflux.app/http/request"
+	"miniflux.app/http/response/json"
+	"miniflux.app/model"
 )
 
-// CreateCategory is the API handler to create a new category.
-func (c *Controller) CreateCategory(w http.ResponseWriter, r *http.Request) {
-	category, err := decodeCategoryPayload(r.Body)
+func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
+	userID := request.UserID(r)
+
+	categoryRequest, err := decodeCategoryRequest(r.Body)
 	if err != nil {
-		json.BadRequest(w, err)
+		json.BadRequest(w, r, err)
 		return
 	}
 
-	ctx := context.New(r)
-	userID := ctx.UserID()
-	category.UserID = userID
+	category := &model.Category{UserID: userID, Title: categoryRequest.Title}
 	if err := category.ValidateCategoryCreation(); err != nil {
-		json.BadRequest(w, err)
+		json.BadRequest(w, r, err)
 		return
 	}
 
-	if c, err := c.store.CategoryByTitle(userID, category.Title); err != nil || c != nil {
-		json.BadRequest(w, errors.New("This category already exists"))
+	if c, err := h.store.CategoryByTitle(userID, category.Title); err != nil || c != nil {
+		json.BadRequest(w, r, errors.New("This category already exists"))
 		return
 	}
 
-	err = c.store.CreateCategory(category)
-	if err != nil {
-		json.ServerError(w, errors.New("Unable to create this category"))
+	if err := h.store.CreateCategory(category); err != nil {
+		json.ServerError(w, r, err)
 		return
 	}
 
-	json.Created(w, category)
+	json.Created(w, r, category)
 }
 
-// UpdateCategory is the API handler to update a category.
-func (c *Controller) UpdateCategory(w http.ResponseWriter, r *http.Request) {
-	categoryID, err := request.IntParam(r, "categoryID")
+func (h *handler) updateCategory(w http.ResponseWriter, r *http.Request) {
+	userID := request.UserID(r)
+	categoryID := request.RouteInt64Param(r, "categoryID")
+
+	category, err := h.store.Category(userID, categoryID)
 	if err != nil {
-		json.BadRequest(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	category, err := decodeCategoryPayload(r.Body)
-	if err != nil {
-		json.BadRequest(w, err)
+	if category == nil {
+		json.NotFound(w, r)
 		return
 	}
 
-	ctx := context.New(r)
-	category.UserID = ctx.UserID()
-	category.ID = categoryID
+	categoryRequest, err := decodeCategoryRequest(r.Body)
+	if err != nil {
+		json.BadRequest(w, r, err)
+		return
+	}
+
+	category.Title = categoryRequest.Title
 	if err := category.ValidateCategoryModification(); err != nil {
-		json.BadRequest(w, err)
+		json.BadRequest(w, r, err)
 		return
 	}
 
-	err = c.store.UpdateCategory(category)
+	err = h.store.UpdateCategory(category)
 	if err != nil {
-		json.ServerError(w, errors.New("Unable to update this category"))
+		json.ServerError(w, r, err)
 		return
 	}
 
-	json.Created(w, category)
+	json.Created(w, r, category)
 }
 
-// GetCategories is the API handler to get a list of categories for a given user.
-func (c *Controller) GetCategories(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	categories, err := c.store.Categories(ctx.UserID())
+func (h *handler) markCategoryAsRead(w http.ResponseWriter, r *http.Request) {
+	userID := request.UserID(r)
+	categoryID := request.RouteInt64Param(r, "categoryID")
+
+	category, err := h.store.Category(userID, categoryID)
 	if err != nil {
-		json.ServerError(w, errors.New("Unable to fetch categories"))
+		json.ServerError(w, r, err)
 		return
 	}
 
-	json.OK(w, categories)
+	if category == nil {
+		json.NotFound(w, r)
+		return
+	}
+
+	if err = h.store.MarkCategoryAsRead(userID, categoryID, time.Now()); err != nil {
+		json.ServerError(w, r, err)
+		return
+	}
+
+	json.NoContent(w, r)
 }
 
-// RemoveCategory is the API handler to remove a category.
-func (c *Controller) RemoveCategory(w http.ResponseWriter, r *http.Request) {
-	ctx := context.New(r)
-	userID := ctx.UserID()
-	categoryID, err := request.IntParam(r, "categoryID")
+func (h *handler) getCategories(w http.ResponseWriter, r *http.Request) {
+	categories, err := h.store.Categories(request.UserID(r))
 	if err != nil {
-		json.BadRequest(w, err)
+		json.ServerError(w, r, err)
 		return
 	}
 
-	if !c.store.CategoryExists(userID, categoryID) {
-		json.NotFound(w, errors.New("Category not found"))
+	json.OK(w, r, categories)
+}
+
+func (h *handler) removeCategory(w http.ResponseWriter, r *http.Request) {
+	userID := request.UserID(r)
+	categoryID := request.RouteInt64Param(r, "categoryID")
+
+	if !h.store.CategoryExists(userID, categoryID) {
+		json.NotFound(w, r)
 		return
 	}
 
-	if err := c.store.RemoveCategory(userID, categoryID); err != nil {
-		json.ServerError(w, errors.New("Unable to remove this category"))
+	if err := h.store.RemoveCategory(userID, categoryID); err != nil {
+		json.ServerError(w, r, err)
 		return
 	}
 
-	json.NoContent(w)
+	json.NoContent(w, r)
 }

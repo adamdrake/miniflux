@@ -2,7 +2,7 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package model
+package model // import "miniflux.app/model"
 
 import (
 	"fmt"
@@ -29,12 +29,14 @@ type Entry struct {
 	URL         string        `json:"url"`
 	CommentsURL string        `json:"comments_url"`
 	Date        time.Time     `json:"published_at"`
+	CreatedAt   time.Time     `json:"created_at"`
 	Content     string        `json:"content"`
 	Author      string        `json:"author"`
+	ShareCode   string        `json:"share_code"`
 	Starred     bool          `json:"starred"`
+	ReadingTime int           `json:"reading_time"`
 	Enclosures  EnclosureList `json:"enclosures,omitempty"`
 	Feed        *Feed         `json:"feed,omitempty"`
-	Category    *Category     `json:"category,omitempty"`
 }
 
 // Entries represents a list of entries.
@@ -53,11 +55,11 @@ func ValidateEntryStatus(status string) error {
 // ValidateEntryOrder makes sure the sorting order is valid.
 func ValidateEntryOrder(order string) error {
 	switch order {
-	case "id", "status", "published_at", "category_title", "category_id":
+	case "id", "status", "changed_at", "published_at", "created_at", "category_title", "category_id":
 		return nil
 	}
 
-	return fmt.Errorf(`Invalid entry order, valid order values are: "id", "status", "published_at", "category_title", "category_id"`)
+	return fmt.Errorf(`Invalid entry order, valid order values are: "id", "status", "changed_at", "published_at", "created_at", "category_title", "category_id"`)
 }
 
 // ValidateDirection makes sure the sorting direction is valid.

@@ -2,12 +2,12 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package form
+package form // import "miniflux.app/ui/form"
 
 import (
 	"net/http"
 
-	"github.com/miniflux/miniflux/errors"
+	"miniflux.app/errors"
 )
 
 // AuthForm represents the authentication form.
@@ -19,7 +19,7 @@ type AuthForm struct {
 // Validate makes sure the form values are valid.
 func (a AuthForm) Validate() error {
 	if a.Username == "" || a.Password == "" {
-		return errors.NewLocalizedError("All fields are mandatory.")
+		return errors.NewLocalizedError("error.fields_mandatory")
 	}
 
 	return nil

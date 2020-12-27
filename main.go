@@ -2,10 +2,9 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package main
+package main // import "miniflux.app"
 
 //go:generate go run generate.go
-//go:generate gofmt -s -w sql/sql.go
 //go:generate gofmt -s -w ui/static/css.go
 //go:generate gofmt -s -w ui/static/bin.go
 //go:generate gofmt -s -w ui/static/js.go
@@ -14,7 +13,7 @@ package main
 //go:generate gofmt -s -w locale/translations.go
 
 import (
-	"github.com/miniflux/miniflux/cli"
+	"miniflux.app/cli"
 )
 
 func main() {

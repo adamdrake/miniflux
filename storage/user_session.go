@@ -2,25 +2,34 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package storage
+package storage // import "miniflux.app/storage"
 
 import (
 	"database/sql"
 	"fmt"
 
-	"github.com/miniflux/miniflux/crypto"
-	"github.com/miniflux/miniflux/model"
+	"miniflux.app/crypto"
+	"miniflux.app/model"
 )
 
 // UserSessions returns the list of sessions for the given user.
 func (s *Storage) UserSessions(userID int64) (model.UserSessions, error) {
-	query := `SELECT
-		id, user_id, token, created_at, user_agent, ip
-		FROM user_sessions
-		WHERE user_id=$1 ORDER BY id DESC`
+	query := `
+		SELECT
+			id,
+			user_id,
+			token,
+			created_at,
+			user_agent,
+			ip
+		FROM
+			user_sessions
+		WHERE
+			user_id=$1 ORDER BY id DESC
+	`
 	rows, err := s.db.Query(query, userID)
 	if err != nil {
-		return nil, fmt.Errorf("unable to fetch user sessions: %v", err)
+		return nil, fmt.Errorf(`store: unable to fetch user sessions: %v`, err)
 	}
 	defer rows.Close()
 
@@ -37,7 +46,7 @@ func (s *Storage) UserSessions(userID int64) (model.UserSessions, error) {
 		)
 
 		if err != nil {
-			return nil, fmt.Errorf("unable to fetch user session row: %v", err)
+			return nil, fmt.Errorf(`store: unable to fetch user session row: %v`, err)
 		}
 
 		sessions = append(sessions, &session)
@@ -46,18 +55,35 @@ func (s *Storage) UserSessions(userID int64) (model.UserSessions, error) {
 	return sessions, nil
 }
 
-// CreateUserSession creates a new sessions.
-func (s *Storage) CreateUserSession(username, userAgent, ip string) (sessionID string, userID int64, err error) {
-	err = s.db.QueryRow("SELECT id FROM users WHERE username = LOWER($1)", username).Scan(&userID)
+// CreateUserSessionFromUsername creates a new user session.
+func (s *Storage) CreateUserSessionFromUsername(username, userAgent, ip string) (sessionID string, userID int64, err error) {
+	token := crypto.GenerateRandomString(64)
+
+	tx, err := s.db.Begin()
 	if err != nil {
-		return "", 0, fmt.Errorf("unable to fetch user ID: %v", err)
+		return "", 0, fmt.Errorf(`store: unable to start transaction: %v`, err)
 	}
 
-	token := crypto.GenerateRandomString(64)
-	query := "INSERT INTO user_sessions (token, user_id, user_agent, ip) VALUES ($1, $2, $3, $4)"
-	_, err = s.db.Exec(query, token, userID, userAgent, ip)
+	err = tx.QueryRow(`SELECT id FROM users WHERE username = LOWER($1)`, username).Scan(&userID)
 	if err != nil {
-		return "", 0, fmt.Errorf("unable to create user session: %v", err)
+		tx.Rollback()
+		return "", 0, fmt.Errorf(`store: unable to fetch user ID: %v`, err)
+	}
+
+	_, err = tx.Exec(
+		`INSERT INTO user_sessions (token, user_id, user_agent, ip) VALUES ($1, $2, $3, $4)`,
+		token,
+		userID,
+		userAgent,
+		ip,
+	)
+	if err != nil {
+		tx.Rollback()
+		return "", 0, fmt.Errorf(`store: unable to create user session: %v`, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", 0, fmt.Errorf(`store: unable to commit transaction: %v`, err)
 	}
 
 	return token, userID, nil
@@ -67,7 +93,19 @@ func (s *Storage) CreateUserSession(username, userAgent, ip string) (sessionID s
 func (s *Storage) UserSessionByToken(token string) (*model.UserSession, error) {
 	var session model.UserSession
 
-	query := "SELECT id, user_id, token, created_at, user_agent, ip FROM user_sessions WHERE token = $1"
+	query := `
+		SELECT
+			id,
+			user_id,
+			token,
+			created_at,
+			user_agent,
+			ip 
+		FROM
+			user_sessions
+		WHERE
+			token = $1
+	`
 	err := s.db.QueryRow(query, token).Scan(
 		&session.ID,
 		&session.UserID,
@@ -77,29 +115,31 @@ func (s *Storage) UserSessionByToken(token string) (*model.UserSession, error) {
 		&session.IP,
 	)
 
-	if err == sql.ErrNoRows {
+	switch {
+	case err == sql.ErrNoRows:
 		return nil, nil
-	} else if err != nil {
-		return nil, fmt.Errorf("unable to fetch user session: %v", err)
+	case err != nil:
+		return nil, fmt.Errorf(`store: unable to fetch user session: %v`, err)
+	default:
+		return &session, nil
 	}
-
-	return &session, nil
 }
 
 // RemoveUserSessionByToken remove a session by using the token.
 func (s *Storage) RemoveUserSessionByToken(userID int64, token string) error {
-	result, err := s.db.Exec(`DELETE FROM user_sessions WHERE user_id=$1 AND token=$2`, userID, token)
+	query := `DELETE FROM user_sessions WHERE user_id=$1 AND token=$2`
+	result, err := s.db.Exec(query, userID, token)
 	if err != nil {
-		return fmt.Errorf("unable to remove this user session: %v", err)
+		return fmt.Errorf(`store: unable to remove this user session: %v`, err)
 	}
 
 	count, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("unable to remove this user session: %v", err)
+		return fmt.Errorf(`store: unable to remove this user session: %v`, err)
 	}
 
 	if count != 1 {
-		return fmt.Errorf("nothing has been removed")
+		return fmt.Errorf(`store: nothing has been removed`)
 	}
 
 	return nil
@@ -107,29 +147,33 @@ func (s *Storage) RemoveUserSessionByToken(userID int64, token string) error {
 
 // RemoveUserSessionByID remove a session by using the ID.
 func (s *Storage) RemoveUserSessionByID(userID, sessionID int64) error {
-	result, err := s.db.Exec(`DELETE FROM user_sessions WHERE user_id=$1 AND id=$2`, userID, sessionID)
+	query := `DELETE FROM user_sessions WHERE user_id=$1 AND id=$2`
+	result, err := s.db.Exec(query, userID, sessionID)
 	if err != nil {
-		return fmt.Errorf("unable to remove this user session: %v", err)
+		return fmt.Errorf(`store: unable to remove this user session: %v`, err)
 	}
 
 	count, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("unable to remove this user session: %v", err)
+		return fmt.Errorf(`store: unable to remove this user session: %v`, err)
 	}
 
 	if count != 1 {
-		return fmt.Errorf("nothing has been removed")
+		return fmt.Errorf(`store: nothing has been removed`)
 	}
 
 	return nil
 }
 
-// CleanOldUserSessions removes user sessions older than 30 days.
-func (s *Storage) CleanOldUserSessions() int64 {
-	query := `DELETE FROM user_sessions
-		WHERE id IN (SELECT id FROM user_sessions WHERE created_at < now() - interval '30 days')`
-
-	result, err := s.db.Exec(query)
+// CleanOldUserSessions removes user sessions older than specified days.
+func (s *Storage) CleanOldUserSessions(days int) int64 {
+	query := `
+		DELETE FROM
+			user_sessions
+		WHERE
+			id IN (SELECT id FROM user_sessions WHERE created_at < now() - interval '%d days')
+	`
+	result, err := s.db.Exec(fmt.Sprintf(query, days))
 	if err != nil {
 		return 0
 	}

@@ -2,17 +2,22 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-package oauth2
+package oauth2 // import "miniflux.app/oauth2"
 
-import "errors"
+import (
+	"context"
+	"errors"
+
+	"miniflux.app/logger"
+)
 
 // Manager handles OAuth2 providers.
 type Manager struct {
 	providers map[string]Provider
 }
 
-// Provider returns the given provider.
-func (m *Manager) Provider(name string) (Provider, error) {
+// FindProvider returns the given provider.
+func (m *Manager) FindProvider(name string) (Provider, error) {
 	if provider, found := m.providers[name]; found {
 		return provider, nil
 	}
@@ -26,8 +31,17 @@ func (m *Manager) AddProvider(name string, provider Provider) {
 }
 
 // NewManager returns a new Manager.
-func NewManager(clientID, clientSecret, redirectURL string) *Manager {
+func NewManager(ctx context.Context, clientID, clientSecret, redirectURL, oidcDiscoveryEndpoint string) *Manager {
 	m := &Manager{providers: make(map[string]Provider)}
 	m.AddProvider("google", newGoogleProvider(clientID, clientSecret, redirectURL))
+
+	if oidcDiscoveryEndpoint != "" {
+		if genericOidcProvider, err := newOidcProvider(ctx, clientID, clientSecret, redirectURL, oidcDiscoveryEndpoint); err != nil {
+			logger.Error("[OAuth2] failed to initialize OIDC provider: %v", err)
+		} else {
+			m.AddProvider("oidc", genericOidcProvider)
+		}
+	}
+
 	return m
 }
